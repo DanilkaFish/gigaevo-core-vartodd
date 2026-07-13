@@ -46,6 +46,7 @@ class MutationSuggestionState(TypedDict):
     program: Program
     intra_card: str | None
     memory_cards: str | None
+    aux_context: str | None
     ancestral_trail: list[dict[str, Any]] | None
     evolutionary_statistics: EvolutionaryStatistics | None
     mutation_mode: str | None
@@ -121,6 +122,12 @@ class MutationSuggestionAgent(LangGraphAgent):
             if cards
             else ""
         )
+        aux = (state.get("aux_context") or "").strip()
+        if not aux:
+            aux = str(program.get_metadata("aux_info") or "").strip()
+        aux_block = (
+            f"\n\n## Program Execution Aux Context\n\n{aux}" if aux else ""
+        )
 
         trail_block = self._format_trail_block(state.get("ancestral_trail"))
         stats_block = self._format_stats_block(
@@ -142,6 +149,7 @@ class MutationSuggestionAgent(LangGraphAgent):
             code=program.code,
             metrics=metrics_text,
             error_section=error_section,
+            aux_block=aux_block,
             intra_block=intra_block,
             memory_cards_block=memory_cards_block,
             trail_block=trail_block,
@@ -288,6 +296,7 @@ class MutationSuggestionAgent(LangGraphAgent):
         program: Program,
         intra_card: str | None = None,
         memory_cards: str | None = None,
+        aux_context: str | None = None,
         ancestral_trail: list[dict[str, Any]] | None = None,
         evolutionary_statistics: EvolutionaryStatistics | None = None,
         mutation_mode: str | None = None,
@@ -296,6 +305,7 @@ class MutationSuggestionAgent(LangGraphAgent):
             "program": program,
             "intra_card": intra_card,
             "memory_cards": memory_cards,
+            "aux_context": aux_context,
             "ancestral_trail": ancestral_trail,
             "evolutionary_statistics": evolutionary_statistics,
             "mutation_mode": mutation_mode,
@@ -306,6 +316,8 @@ class MutationSuggestionAgent(LangGraphAgent):
                 "program_id": program.id,
                 "intra_present": bool((intra_card or "").strip()),
                 "memory_cards_present": bool((memory_cards or "").strip()),
+                "aux_present": bool((aux_context or "").strip())
+                or bool(str(program.get_metadata("aux_info") or "").strip()),
                 "trail_len": len(ancestral_trail or []),
                 "stats_present": evolutionary_statistics is not None,
                 "mutation_mode": mutation_mode,

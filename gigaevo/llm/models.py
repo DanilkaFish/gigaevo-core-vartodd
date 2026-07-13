@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Callable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator, Sequence
 from contextvars import ContextVar
 import json
 import os
 import random
+import re
 from typing import TYPE_CHECKING, Any, cast
 import urllib.error
 import urllib.request
@@ -115,6 +116,7 @@ class MultiModelRouter(Runnable):
         writer: LogWriter | None = None,
         name: str = "default",
         structured_output_method: str | None = None,
+        structured_output_optional_tool_model_prefixes: Sequence[str] | None = None,
     ):
         if len(models) != len(probabilities):
             raise ValueError(
@@ -129,6 +131,9 @@ class MultiModelRouter(Runnable):
         self._task_model_map: dict[int, str] = {}
         self._name = name
         self._structured_output_method = structured_output_method
+        self._structured_output_optional_tool_model_prefixes = tuple(
+            structured_output_optional_tool_model_prefixes or ()
+        )
 
         self._tracker = TokenTracker(
             name=name,
@@ -304,12 +309,14 @@ class MultiModelRouter(Runnable):
         If the router was constructed with ``structured_output_method`` (e.g.
         ``"json_schema"`` or ``"function_calling"``), that method is forwarded
         to each underlying model. Explicit ``method`` in ``**kwargs`` wins.
+        Models whose names match ``structured_output_optional_tool_model_prefixes``
+        receive the same schema as an optional OpenAI tool with no ``tool_choice``.
         """
         if self._structured_output_method is not None:
             kwargs.setdefault("method", self._structured_output_method)
         wrapped = [
-            m.with_structured_output(schema, include_raw=True, **kwargs)
-            for m in self.models
+            self._wrap_structured_model(m, name, schema, kwargs)
+            for m, name in zip(self.models, self.model_names, strict=True)
         ]
         return _StructuredOutputRouter(
             wrapped,
@@ -319,6 +326,174 @@ class MultiModelRouter(Runnable):
             self._tracker,
             task_model_map=self._task_model_map,
         )
+
+    def _uses_optional_tool_structured_output(self, model_name: str) -> bool:
+        return any(
+            model_name.startswith(prefix)
+            for prefix in self._structured_output_optional_tool_model_prefixes
+        )
+
+    def _wrap_structured_model(
+        self, model: ChatOpenAI, model_name: str, schema: Any, kwargs: dict[str, Any]
+    ) -> Runnable:
+        if self._uses_optional_tool_structured_output(model_name):
+            return _OptionalToolStructuredOutput(model, schema, kwargs)
+        return model.with_structured_output(schema, include_raw=True, **kwargs)
+
+
+class _OptionalToolStructuredOutput(Runnable):
+    """Structured-output adapter that does not force a tool call.
+
+    Some thinking models exposed through OpenRouter reject forced tool choice, but
+    still accept a normal ``tools`` list. This adapter sends the schema as an
+    optional tool, then validates either a returned tool call or JSON content into
+    the requested Pydantic schema. The returned mapping mirrors LangChain's
+    ``include_raw=True`` shape consumed by :class:`_StructuredOutputRouter`.
+    """
+
+    def __init__(self, model: ChatOpenAI, schema: Any, kwargs: dict[str, Any]):
+        self._model = model
+        self._schema = schema
+        self._tool = self._to_openai_tool(schema)
+        self._invoke_kwargs = {
+            k: v
+            for k, v in kwargs.items()
+            if k not in {"include_raw", "method", "tool_choice"}
+        }
+
+    @staticmethod
+    def _to_openai_tool(schema: Any) -> dict[str, Any]:
+        try:
+            from langchain_core.utils.function_calling import convert_to_openai_tool
+        except Exception:  # pragma: no cover - version compatibility fallback
+            convert_to_openai_tool = None
+
+        if convert_to_openai_tool is not None:
+            return cast(dict[str, Any], convert_to_openai_tool(schema))
+
+        if isinstance(schema, dict):
+            if schema.get("type") == "function":
+                return schema
+            name = str(schema.get("title") or "StructuredOutput")
+            return {
+                "type": "function",
+                "function": {"name": name, "parameters": schema},
+            }
+
+        json_schema = schema.model_json_schema()
+        return {
+            "type": "function",
+            "function": {
+                "name": getattr(schema, "__name__", "StructuredOutput"),
+                "description": (getattr(schema, "__doc__", "") or "").strip(),
+                "parameters": json_schema,
+            },
+        }
+
+    @staticmethod
+    def _json_loads(value: Any) -> dict[str, Any]:
+        if isinstance(value, dict):
+            return value
+        if not isinstance(value, str):
+            raise ValueError(
+                f"expected JSON object or string, got {type(value).__name__}"
+            )
+        return cast(dict[str, Any], json.loads(value))
+
+    @staticmethod
+    def _content_text(content: Any) -> str:
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts: list[str] = []
+            for item in content:
+                if isinstance(item, str):
+                    parts.append(item)
+                elif isinstance(item, dict):
+                    text = item.get("text") or item.get("content")
+                    if isinstance(text, str):
+                        parts.append(text)
+            return "".join(parts)
+        return ""
+
+    @staticmethod
+    def _strip_json_fence(text: str) -> str:
+        stripped = text.strip()
+        if stripped.startswith("```"):
+            stripped = re.sub(r"^```(?:json)?\s*", "", stripped)
+            stripped = re.sub(r"\s*```$", "", stripped)
+        return stripped.strip()
+
+    def _extract_tool_payload(self, raw: Any) -> dict[str, Any] | None:
+        tool_calls = getattr(raw, "tool_calls", None)
+        if isinstance(tool_calls, list) and tool_calls:
+            call = tool_calls[0]
+            if isinstance(call, dict):
+                args = call.get("args")
+                if args is None:
+                    args = (call.get("function") or {}).get("arguments")
+                return self._json_loads(args)
+
+            args = getattr(call, "args", None)
+            if args is None:
+                function = getattr(call, "function", None)
+                args = getattr(function, "arguments", None)
+            return self._json_loads(args)
+
+        additional_kwargs = getattr(raw, "additional_kwargs", None)
+        if isinstance(additional_kwargs, dict):
+            raw_calls = additional_kwargs.get("tool_calls")
+            if isinstance(raw_calls, list) and raw_calls:
+                function = raw_calls[0].get("function") or {}
+                return self._json_loads(function.get("arguments"))
+        return None
+
+    def _extract_content_payload(self, raw: Any) -> dict[str, Any]:
+        text = self._strip_json_fence(self._content_text(getattr(raw, "content", "")))
+        try:
+            return self._json_loads(text)
+        except json.JSONDecodeError:
+            start = text.find("{")
+            end = text.rfind("}")
+            if start >= 0 and end > start:
+                return self._json_loads(text[start : end + 1])
+            raise
+
+    def _parse(self, raw: Any) -> Any:
+        payload = self._extract_tool_payload(raw)
+        if payload is None:
+            payload = self._extract_content_payload(raw)
+
+        if hasattr(self._schema, "model_validate"):
+            return self._schema.model_validate(payload)
+        if hasattr(self._schema, "parse_obj"):
+            return self._schema.parse_obj(payload)
+        return payload
+
+    def _process_raw(self, raw: Any) -> dict[str, Any]:
+        try:
+            parsed = self._parse(raw)
+            return {"raw": raw, "parsed": parsed}
+        except Exception as exc:
+            return {"raw": raw, "parsed": None, "parsing_error": str(exc)}
+
+    def _call_kwargs(self, kwargs: dict[str, Any]) -> dict[str, Any]:
+        call_kwargs = {**self._invoke_kwargs, **kwargs}
+        call_kwargs.pop("tool_choice", None)
+        call_kwargs["tools"] = [self._tool]
+        return call_kwargs
+
+    def invoke(
+        self, input: LanguageModelInput, config: RunnableConfig | None = None, **kwargs
+    ) -> dict[str, Any]:
+        raw = self._model.invoke(input, config, **self._call_kwargs(kwargs))
+        return self._process_raw(raw)
+
+    async def ainvoke(
+        self, input: LanguageModelInput, config: RunnableConfig | None = None, **kwargs
+    ) -> dict[str, Any]:
+        raw = await self._model.ainvoke(input, config, **self._call_kwargs(kwargs))
+        return self._process_raw(raw)
 
 
 class _StructuredOutputRouter(Runnable):
@@ -368,9 +543,11 @@ class _StructuredOutputRouter(Runnable):
         if parsed is None and raw is not None:
             content = getattr(raw, "content", "")
             excerpt = (content[:500] + "…") if len(content) > 500 else content
+            parsing_error = response.get("parsing_error")
+            detail = f" parsing_error={parsing_error!r}." if parsing_error else ""
             raise ValueError(
                 f"[{name}] Structured output parse failed: raw response had no parsable schema. "
-                f"content_excerpt={excerpt!r}"
+                f"{detail} content_excerpt={excerpt!r}"
             )
         return parsed
 

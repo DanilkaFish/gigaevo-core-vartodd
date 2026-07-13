@@ -1,0 +1,14 @@
+# @package _global_
+
+defaults:
+  - base
+  - override /pipeline: vartodd_pipeline
+  - override /algorithm: vartodd_diverse_gf32
+  - override /llm: openrouter_vartodd_evolution
+  - override /evolution: batch
+  - _self_
+
+problem:
+  name: vartodd_gf32
+
+num_parents: 2

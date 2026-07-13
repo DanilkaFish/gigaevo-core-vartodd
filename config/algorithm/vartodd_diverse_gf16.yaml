@@ -1,0 +1,123 @@
+# @package _global_
+
+defaults:
+  - _base
+
+# VarTODD-specific MAP-Elites archive.
+# Preserve diversity across final fitness, saved-path usage, and runtime budget.
+
+mutation_operator:
+  llm_wrapper: ${oc.select:llm_mutation,${llm}}
+  live_path_store_root_dir: ${hydra:runtime.cwd}/data/path_backups
+  live_path_store_top_k: 12
+  prompts_dir: ${problem.dir}/prompts
+  mutation_regime_probability: 0.75
+  mutation_regime_guidance:
+    - probability: 0.55
+      text: |
+        ## Required Mutation Regime
+        Regime: ab-initio search and wide-margin exploration.
+
+        Build fresh via Evaluator(path_name="init", ...), or reopen any store
+        path (near_tail_paths or wide_margin_paths) with margin 50..140 to
+        branch above the degenerate near-final funnel. Goal: cover new
+        territory and deposit a fresh, reusable near-final path.
+
+        Prefer TOHPE-heavy/TODD-light with a finite ZBucketSearch.limit_bucket
+        while dim is still large (low finite limits get a small fitness
+        reward). If the parent keeps returning the same rank, change the
+        mechanism (optimizer, source mix, score shape, beamwidth, restart,
+        schedule). Any policy mapping parametrization or discovergin new mechanisms is beneficial.
+    - probability: 0.45
+      text: |
+        ## Required Mutation Regime
+        Regime: exploit a saved path according to its Live Path Store group.
+
+        Use Evaluator(path_name=<live_path_name>, margin=<evidence_based_margin>)
+        with a name from near_tail_paths or wide_margin_paths. Never invent
+        names or load dead_end_paths/best_nonimproved_child_paths. Must
+        actually load that path and try to beat loaded_path_rank.
+
+        - near_tail_paths: usign during search ZBucketSearch.limit_bucket=-1 is often the winning move, not a cost
+          to avoid — it can surface actions a capped search never reaches.
+        - wide_margin_paths: already exhausted for near-tail treatment
+          (full-searched, capped high, or reopened repeatedly). Escalate, do
+          not nudge: a medium-to-wide margin (30..100, scaled to failed
+          reuses).
+
+runtime_bounds:
+  _target_: gigaevo.config.helpers.get_bounds
+  metrics_context: ${metrics_context}
+  key: runtime
+
+loaded_rank_bounds:
+  _target_: gigaevo.config.helpers.get_bounds
+  metrics_context: ${metrics_context}
+  key: loaded_rank
+
+behavior_space:
+  # loaded_rank is a strategy descriptor: it separates ab-initio builders
+  # (loaded_rank near 1701) from saved-path refiners by their branch point, so
+  # distinct load strategies occupy distinct archive cells.
+  _target_: gigaevo.config.helpers.build_behavior_space
+  keys:
+    - ${primary_key}
+    - runtime
+    - loaded_rank
+    - ${validity_key}
+  bounds:
+    - ${primary_bounds}
+    - ${runtime_bounds}
+    - ${loaded_rank_bounds}
+    - ${validity_bounds}
+  resolutions:
+    - 25
+    - 4
+    - 10
+    - 2
+  binning_types:
+    - ${binning_type}
+    - linear
+    - linear
+    - linear
+  dynamic: true
+  expansion_buffer_ratio: 0.1
+
+island_max_size: 40
+
+islands:
+  - _target_: gigaevo.evolution.strategies.map_elites.IslandConfig
+    island_id: ${island_id}
+    max_size: ${island_max_size}
+    behavior_space: ${behavior_space}
+    archive_selector:
+      _target_: gigaevo.evolution.strategies.map_elites.SumArchiveSelector
+      fitness_keys:
+        - ${primary_key}
+      fitness_key_higher_is_better:
+        - ${higher_is_better}
+    elite_selector:
+      _target_: gigaevo.evolution.strategies.map_elites.WeightedEliteSelector
+      fitness_key: ${primary_key}
+      fitness_key_higher_is_better: ${higher_is_better}
+      # Lower fitness pressure keeps parent sampling less greedy while public
+      # WeightedEliteSelector still applies its built-in child-count penalty.
+      lambda_: 5.0
+      epsilon: 1e-8
+    archive_remover:
+      _target_: gigaevo.evolution.strategies.map_elites.FitnessArchiveRemover
+      fitness_key: ${primary_key}
+      fitness_key_higher_is_better: ${higher_is_better}
+    migrant_selector:
+      _target_: gigaevo.evolution.strategies.map_elites.TopFitnessMigrantSelector
+      fitness_key: ${primary_key}
+      fitness_key_higher_is_better: ${higher_is_better}
+    migration_rate: ${migration_rate}
+
+evolution_strategy:
+  _target_: gigaevo.evolution.strategies.map_elites.MapElitesMultiIsland
+  island_configs: ${islands}
+  program_storage: ${ref:redis_storage}
+  migration_interval: ${migration_interval}
+  enable_migration: ${enable_migration}
+  max_migrants_per_island: ${max_migrants_per_island}

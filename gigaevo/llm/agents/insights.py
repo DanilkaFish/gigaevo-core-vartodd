@@ -4,7 +4,7 @@ This agent analyzes programs to generate actionable insights for evolution.
 ALL LLM-related logic lives here - stages are just thin wrappers.
 """
 
-from typing import TypedDict
+from typing import Any, TypedDict
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
@@ -42,7 +42,7 @@ class ProgramInsight(BaseModel):
         default="",
         description=(
             "Which input the anchor came from: program | metrics | intra_memory "
-            "| memory_cards | ancestral_trail | evolutionary_statistics."
+            "| memory_cards | ancestral_trail | evolutionary_statistics | program_aux."
         ),
     )
     mechanism: str = Field(
@@ -114,6 +114,33 @@ class InsightsState(TypedDict):
 
 class InsightsAgent(LangGraphAgent):
     StateSchema = InsightsState
+
+    @staticmethod
+    def _strip_task_description_from_user_template(template: str) -> str:
+        """Ensure insights task_description is system-only, even with custom user prompts."""
+        lines = template.splitlines()
+        drop: set[int] = set()
+        task_labels = {
+            "task",
+            "task:",
+            "task description",
+            "task description:",
+            "problem",
+            "problem:",
+        }
+        for idx, line in enumerate(lines):
+            if "{task_description}" not in line:
+                continue
+            drop.add(idx)
+            if idx > 0 and lines[idx - 1].strip().lower() in task_labels:
+                drop.add(idx - 1)
+
+        cleaned_lines: list[str] = []
+        for idx, line in enumerate(lines):
+            if idx in drop:
+                continue
+            cleaned_lines.append(line.replace("{task_description}", ""))
+        return "\n".join(cleaned_lines).strip()
     """Agent for generating program insights.
 
     This agent does ALL the heavy lifting:
@@ -145,7 +172,9 @@ class InsightsAgent(LangGraphAgent):
             metrics_formatter: Formatter for program metrics
         """
         self.system_prompt_template = system_prompt_template
-        self.user_prompt_template = user_prompt_template
+        self.user_prompt_template = self._strip_task_description_from_user_template(
+            user_prompt_template
+        )
         self.max_insights = max_insights
         self.metrics_formatter = metrics_formatter
         structured_llm = llm.with_structured_output(ProgramInsights)
@@ -178,10 +207,16 @@ class InsightsAgent(LangGraphAgent):
             if errors
             else ""
         )
+        aux_parts = []
+        aux_info = program.get_metadata("aux_info")
+        if aux_info:
+            aux_parts.append(str(aux_info))
+        aux_context = "\n\n".join(aux_parts) if aux_parts else "No aux context available"
 
         user_prompt = self.user_prompt_template.format(
             code=program.code,
             metrics=metrics_text,
+            aux_context=aux_context,
             error_section=error_section,
             max_insights=self.max_insights,
         )
@@ -201,18 +236,17 @@ class InsightsAgent(LangGraphAgent):
         state["insights"] = llm_response
         return state
 
-    async def arun(
+    async def arun_with_metadata(
         self,
         program: Program,
-    ) -> ProgramInsights:
-        """Run insights analysis on a program.
+    ) -> tuple[ProgramInsights, dict[str, Any]]:
+        """Run insights analysis and return LLM-call metadata.
 
         Args:
             program: Program to analyze
 
         Returns:
-            List of insight dicts with "type" and "insight" keys
-            lineage_data: is not used for now; in the future we can use it to add more context to the insights
+            Structured insights plus metadata captured during the LLM call.
         """
         initial_state: InsightsState = {
             "program": program,
@@ -223,4 +257,12 @@ class InsightsAgent(LangGraphAgent):
         }
 
         final_state = await self.graph.ainvoke(initial_state)
-        return final_state["insights"]
+        return final_state["insights"], dict(final_state.get("metadata") or {})
+
+    async def arun(
+        self,
+        program: Program,
+    ) -> ProgramInsights:
+        """Run insights analysis on a program."""
+        insights, _metadata = await self.arun_with_metadata(program)
+        return insights

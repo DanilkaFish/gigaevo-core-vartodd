@@ -2,7 +2,7 @@ import re
 
 import hydra
 from hydra.utils import instantiate
-from omegaconf import DictConfig, ListConfig, OmegaConf
+from omegaconf import DictConfig, ListConfig, OmegaConf, flag_override
 
 
 def _ref_resolver(path, *, _root_):
@@ -22,7 +22,8 @@ def _ref_resolver(path, *, _root_):
     # Instantiate if node is a config object
     if isinstance(node, (DictConfig, ListConfig)):
         instantiated_node = instantiate(node, _recursive_=True)
-        parent[base] = instantiated_node
+        with flag_override(parent, "allow_objects", True):
+            parent[base] = instantiated_node
     else:
         instantiated_node = node
 

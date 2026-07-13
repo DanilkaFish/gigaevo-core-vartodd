@@ -43,6 +43,11 @@ def create_mutation_agent(
     mutation_mode: str = "rewrite",
     prompts_dir: str | Path | None = None,
     prompt_fetcher: PromptFetcher | None = None,
+    live_path_store_root_dir: str | Path | None = None,
+    live_path_store_problem_dir: str | Path | None = None,
+    live_path_store_top_k: int = 6,
+    mutation_regime_guidance: list[object] | None = None,
+    mutation_regime_probability: float = 1.0,
 ) -> MutationAgent:
     """Create a fully configured mutation agent.
 
@@ -62,6 +67,16 @@ def create_mutation_agent(
             When provided, the fetcher is used both for the initial system prompt
             and for refreshing it on every build_prompt() call (if is_dynamic=True).
             When None, a FixedDirPromptFetcher(prompts_dir) is created.
+        live_path_store_root_dir: Optional saved-path root. When set with a
+            problem dir containing path_store.py, mutation prompts load one fresh
+            live path snapshot.
+        live_path_store_problem_dir: Optional problem dir containing path_store.py.
+        live_path_store_top_k: Number of saved path candidates to show.
+        mutation_regime_guidance: Optional list of diversity guidance blocks.
+            Entries may be strings or mappings with text/guidance/regime and
+            probability/weight.
+        mutation_regime_probability: Probability of appending one sampled
+            regime block when guidance is configured.
 
     Returns:
         Ready-to-use MutationAgent
@@ -110,6 +125,11 @@ def create_mutation_agent(
         prompt_fetcher=fetcher,
         task_description=task_description,
         metrics_context=metrics_context,
+        live_path_store_root_dir=live_path_store_root_dir,
+        live_path_store_problem_dir=live_path_store_problem_dir,
+        live_path_store_top_k=live_path_store_top_k,
+        mutation_regime_guidance=mutation_regime_guidance,
+        mutation_regime_probability=mutation_regime_probability,
     )
 
 
@@ -244,7 +264,9 @@ def create_lineage_agent(
         >>> insights = await agent.arun(parent, child)
     """
     # Load prompts from files
-    system_prompt = LineagePrompts.system(prompts_dir=prompts_dir)
+    system_prompt = LineagePrompts.system(prompts_dir=prompts_dir).replace(
+        "{task_description}", task_description
+    )
     user_template = LineagePrompts.user(prompts_dir=prompts_dir)
 
     # Create metrics formatter

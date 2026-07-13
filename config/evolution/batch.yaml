@@ -1,0 +1,40 @@
+# @package _global_
+#
+# Legacy-style batch evolution engine:
+#   select an elite pool -> create a batch of unique parent combinations ->
+#   wait for DAG evaluation -> ingest -> refresh archive -> next generation.
+# Opt-in via: python run.py evolution=batch ...
+
+defaults:
+  - default
+
+max_elites_per_generation: 10
+max_mutations_per_generation: 16
+max_generations: null
+num_parents: 2
+
+max_concurrent_dags: 8
+prefetch_factor: 0
+prefetch_extra: 0
+
+engine_config:
+  _target_: custom.batch_engine.BatchEngineConfig
+  loop_interval: ${loop_interval}
+  max_elites_per_generation: ${max_elites_per_generation}
+  max_mutations_per_generation: ${max_mutations_per_generation}
+  max_generations: ${max_generations}
+  program_acceptor: ${program_acceptor}
+  parent_selector: ${parent_selector}
+  stopper: ${stopper}
+
+evolution_engine:
+  _target_: custom.batch_engine.BatchEvolutionEngine
+  storage: ${ref:redis_storage}
+  strategy: ${evolution_strategy}
+  mutation_operator: ${mutation_operator}
+  config: ${engine_config}
+  writer: ${writer}
+  metrics_tracker: ${metrics_tracker}
+  pre_step_hook: ${pre_step_hook}
+  post_run_hook: ${ideas_tracker}
+  post_step_hook: ${post_step_hook}

@@ -1,0 +1,11 @@
+PROGRAM:
+```python
+{code}
+```
+
+CURRENT METRICS: {metrics}
+
+EXECUTION AUX CONTEXT:
+{aux_context}
+
+ERRORS: {error_section}

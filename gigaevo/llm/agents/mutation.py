@@ -1,7 +1,12 @@
 import ast
+from collections.abc import Mapping
 from datetime import UTC, datetime
+import importlib.util
 import os
+from pathlib import Path
+import random
 import re
+import sys
 import time
 from typing import TYPE_CHECKING, Any, NotRequired, TypedDict
 
@@ -116,6 +121,7 @@ class MutationState(TypedDict):
     user_prompt: NotRequired[str]
     # Prompt tracking ID (None for fixed prompts, sha256[:16] for co-evolved prompts)
     prompt_id: NotRequired[str | None]
+    selected_mutation_regime: NotRequired[str | None]
     # Fields set during response parsing (optional initially)
     parsed_output: NotRequired[dict[str, Any]]
     structured_output: NotRequired[MutationStructuredOutput]
@@ -150,6 +156,11 @@ class MutationAgent(LangGraphAgent):
         prompt_fetcher: "PromptFetcher | None" = None,
         task_description: str = "",
         metrics_context: "MetricsContext | None" = None,
+        live_path_store_root_dir: str | Path | None = None,
+        live_path_store_problem_dir: str | Path | None = None,
+        live_path_store_top_k: int = 6,
+        mutation_regime_guidance: list[Any] | None = None,
+        mutation_regime_probability: float = 1.0,
     ):
         """Initialize mutation agent.
 
@@ -166,10 +177,39 @@ class MutationAgent(LangGraphAgent):
                 (required when prompt_fetcher.is_dynamic is True)
             metrics_context: Metrics context for prompt template formatting
                 (required when prompt_fetcher.is_dynamic is True)
+            live_path_store_root_dir: Optional root directory for Vartodd saved
+                paths. When set with a problem dir containing path_store.py, a
+                fresh summary is appended to each mutation prompt.
+            live_path_store_problem_dir: Optional problem directory containing
+                path_store.py.
+            live_path_store_top_k: Number of saved paths to show in the prompt.
+            mutation_regime_guidance: Optional list of diversity guidance blocks.
+                Entries may be strings or mappings with text/guidance/regime and
+                probability/weight. When provided, one block is sampled for each
+                mutation prompt according to entry weights.
+            mutation_regime_probability: Probability of appending one sampled
+                regime block when guidance is configured.
         """
         self.mutation_mode = mutation_mode
         self.system_prompt = system_prompt
         self.user_prompt_template = user_prompt_template
+        self.live_path_store_root_dir = (
+            Path(live_path_store_root_dir)
+            if live_path_store_root_dir is not None
+            else None
+        )
+        self.live_path_store_problem_dir = (
+            Path(live_path_store_problem_dir)
+            if live_path_store_problem_dir is not None
+            else None
+        )
+        self.live_path_store_top_k = live_path_store_top_k
+        self.mutation_regime_guidance = self._parse_mutation_regime_guidance(
+            mutation_regime_guidance or []
+        )
+        self.mutation_regime_probability = min(
+            1.0, max(0.0, float(mutation_regime_probability))
+        )
 
         # Dynamic prompt fetching support
         self._prompt_fetcher = prompt_fetcher
@@ -236,6 +276,7 @@ class MutationAgent(LangGraphAgent):
         result = final_state.get("parsed_output", {})
         # Forward prompt_id from state into result for operator to stamp in metadata
         result["prompt_id"] = final_state.get("prompt_id")
+        result["mutation_regime"] = final_state.get("selected_mutation_regime")
         return result
 
     async def acall_llm(self, state: MutationState) -> MutationState:
@@ -352,7 +393,7 @@ class MutationAgent(LangGraphAgent):
             state["prompt_id"] = None
 
         parents = state["input"]
-        user_prompt = self.build_user_prompt(parents)
+        user_prompt = self.build_user_prompt(parents, state=state)
 
         # Store prompts in state for logging
         state["system_prompt"] = self.system_prompt
@@ -379,7 +420,9 @@ class MutationAgent(LangGraphAgent):
 
         return state
 
-    def build_user_prompt(self, parents: list[Program]) -> str:
+    def build_user_prompt(
+        self, parents: list[Program], state: MutationState | None = None
+    ) -> str:
         """Build the mutation user prompt for a set of parents."""
         parent_blocks = self._build_parent_blocks(parents)
         memory_block = self._build_memory_block(parents)
@@ -388,13 +431,68 @@ class MutationAgent(LangGraphAgent):
         prompt_fields = MutationPromptFields(
             count=len(parents), parent_blocks=parent_blocks
         )
-        return self.user_prompt_template.format(**prompt_fields.model_dump())
+        user_prompt = self.user_prompt_template.format(**prompt_fields.model_dump())
+        live_path_store = self._build_live_path_store_block()
+        if live_path_store:
+            user_prompt = f"{user_prompt}\n\n{live_path_store}"
+        regime = self._sample_mutation_regime()
+        if regime:
+            if state is not None:
+                state["selected_mutation_regime"] = regime
+            user_prompt = f"{user_prompt}\n\n{self._format_mutation_regime(regime)}"
+        elif state is not None:
+            state["selected_mutation_regime"] = None
+        return user_prompt
+
+    def _sample_mutation_regime(self) -> str | None:
+        """Sample one optional diversity instruction for this mutation call."""
+        if not self.mutation_regime_guidance:
+            return None
+        if random.random() >= self.mutation_regime_probability:
+            return None
+        regimes = [item[0] for item in self.mutation_regime_guidance]
+        weights = [item[1] for item in self.mutation_regime_guidance]
+        return random.choices(regimes, weights=weights, k=1)[0]
+
+    @staticmethod
+    def _parse_mutation_regime_guidance(items: list[Any]) -> list[tuple[str, float]]:
+        parsed: list[tuple[str, float]] = []
+        for item in items:
+            weight = 1.0
+            text: str
+            if isinstance(item, Mapping) or (
+                hasattr(item, "get") and not isinstance(item, str)
+            ):
+                raw_text = (
+                    item.get("text")
+                    or item.get("guidance")
+                    or item.get("regime")
+                    or item.get("content")
+                    or ""
+                )
+                text = str(raw_text).strip()
+                raw_weight = item.get("probability", item.get("weight", 1.0))
+                try:
+                    weight = float(raw_weight)
+                except (TypeError, ValueError):
+                    weight = 0.0
+            else:
+                text = str(item).strip()
+            if text and weight > 0:
+                parsed.append((text, weight))
+        return parsed
+
+    @staticmethod
+    def _format_mutation_regime(regime: str) -> str:
+        return regime.strip()
 
     def _build_parent_blocks(self, parents: list[Program]) -> str:
         """Build formatted parent blocks for the mutation prompt."""
         blocks: list[str] = []
         for i, p in enumerate(parents):
-            formatted_context = p.metadata.get(MUTATION_CONTEXT_METADATA_KEY) or ""
+            formatted_context = self._strip_aux_sections(
+                str(p.metadata.get(MUTATION_CONTEXT_METADATA_KEY) or "")
+            )
 
             block = f"""=== Parent {i + 1} ===
 ```python
@@ -406,6 +504,49 @@ class MutationAgent(LangGraphAgent):
             blocks.append(block)
 
         return "\n\n".join(blocks)
+
+    @staticmethod
+    def _strip_aux_sections(text: str) -> str:
+        """Keep validator/path aux reports out of mutation prompts."""
+        return re.sub(
+            r"(?ms)^## Program execution aux info\b.*?(?=^---$|^## |\Z)",
+            "",
+            text,
+        ).strip()
+
+    def _build_live_path_store_block(self) -> str:
+        """Load a fresh saved-path summary for the current mutation prompt."""
+        if (
+            self.live_path_store_root_dir is None
+            or self.live_path_store_problem_dir is None
+        ):
+            return ""
+
+        problem_dir = self.live_path_store_problem_dir.resolve()
+        path_store_py = problem_dir / "path_store.py"
+        if not path_store_py.exists():
+            return ""
+
+        try:
+            problem_dir_str = str(problem_dir)
+            if problem_dir_str not in sys.path:
+                sys.path.insert(0, problem_dir_str)
+
+            module_name = f"_gigaevo_mutation_path_store_{abs(hash(problem_dir_str))}"
+            spec = importlib.util.spec_from_file_location(module_name, path_store_py)
+            if spec is None or spec.loader is None:
+                raise ImportError(f"cannot load path_store.py from {problem_dir}")
+
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[module_name] = module
+            spec.loader.exec_module(module)
+            path_store = module.PathStore(root_dir=str(self.live_path_store_root_dir))
+            summary = path_store.summarize(top_k=self.live_path_store_top_k)
+        except Exception as exc:
+            logger.warning("[MutationAgent] live path store unavailable: {}", exc)
+            summary = f"path store unavailable: {exc}"
+
+        return f"## Live Path Store\n\n{summary}"
 
     def _build_memory_block(self, parents: list[Program]) -> str:
         """Build a single memory block from any parent metadata."""
@@ -486,6 +627,7 @@ class MutationAgent(LangGraphAgent):
                 "insights_used": structured_output.insights_used,
                 "changes": structured_output.changes,
                 "model_used": model_used,
+                "mutation_regime": state.get("selected_mutation_regime"),
             }
 
             logger.debug(

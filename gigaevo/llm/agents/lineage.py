@@ -32,7 +32,7 @@ class TransitionInsights(BaseModel):
     """Collection of transition insights."""
 
     insights: list[TransitionInsight] = Field(
-        description="List of 3-5 strategy insights", min_length=3, max_length=5
+        description="List of 2-5 strategy insights", min_length=2, max_length=5
     )
 
 
@@ -96,6 +96,33 @@ class LineageAgent(LangGraphAgent):
 
     StateSchema = LineageState
 
+    @staticmethod
+    def _strip_task_description_from_user_template(template: str) -> str:
+        """Keep task_description in the system prompt only."""
+        lines = template.splitlines()
+        drop: set[int] = set()
+        task_labels = {
+            "task",
+            "task:",
+            "task description",
+            "task description:",
+            "problem",
+            "problem:",
+        }
+        for idx, line in enumerate(lines):
+            if "{task_description}" not in line:
+                continue
+            drop.add(idx)
+            if idx > 0 and lines[idx - 1].strip().lower() in task_labels:
+                drop.add(idx - 1)
+
+        cleaned_lines: list[str] = []
+        for idx, line in enumerate(lines):
+            if idx in drop:
+                continue
+            cleaned_lines.append(line.replace("{task_description}", ""))
+        return "\n".join(cleaned_lines).strip()
+
     def __init__(
         self,
         llm: ChatOpenAI | MultiModelRouter,
@@ -114,7 +141,9 @@ class LineageAgent(LangGraphAgent):
             metrics_formatter: Formatter for program metrics
         """
         self.system_prompt = system_prompt
-        self.user_prompt_template = user_prompt_template
+        self.user_prompt_template = self._strip_task_description_from_user_template(
+            user_prompt_template
+        )
         self.task_description = task_description
         self.metrics_formatter = metrics_formatter
 
@@ -220,6 +249,12 @@ class LineageAgent(LangGraphAgent):
         child_errors = child.format_errors(
             include_traceback=True, exclude_stages=set(OPTIMIZATION_STAGES)
         )
+        parent_aux_context = str(
+            parent.get_metadata("aux_info") or "No parent aux context available"
+        )
+        child_aux_context = str(
+            child.get_metadata("aux_info") or "No child aux context available"
+        )
 
         metric_name = self.metrics_formatter.context.get_primary_key()
         metric_description = self.metrics_formatter.context.get_description(metric_name)
@@ -250,7 +285,6 @@ class LineageAgent(LangGraphAgent):
             shared_subset_block = ""
 
         user_prompt = self.user_prompt_template.format(
-            task_description=self.task_description,
             metric_name=metric_name,
             metric_description=metric_description,
             delta=delta,
@@ -258,6 +292,8 @@ class LineageAgent(LangGraphAgent):
             delta_interpretation=delta_interpretation,
             parent_errors=parent_errors,
             child_errors=child_errors,
+            parent_aux_context=parent_aux_context,
+            child_aux_context=child_aux_context,
             additional_metrics=additional_metrics_str,
             shared_subset_block=shared_subset_block,
             diff_blocks=rendered_blocks,

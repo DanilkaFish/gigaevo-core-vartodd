@@ -164,6 +164,13 @@ tmp/
 # Keep these config JSON files in-repo
 !pyrightconfig.json
 
+# VarTODD local native build/runtime outputs.
+/.vartodd-src/
+/pyvartodd/
+/problems/*/pyvartodd/
+/problems/*/initial_programs/.exec_cache/
+/data/path_backups/
+
 # Keep benchmark history (small, append-only) — rebuild with scripts if lost
 !tools/benchmark_history.jsonl
 
@@ -311,3 +318,9 @@ secrets.json
 id_rsa
 id_rsa.pub
 *.pem
+
+# VarTODD computed path snapshots: keep only portable metadata/pickle payloads.
+/computed_paths/**
+!/computed_paths/**/
+!/computed_paths/**/*.json
+!/computed_paths/**/*.pkl

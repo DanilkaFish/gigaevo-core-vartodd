@@ -1,0 +1,115 @@
+# @package _global_
+
+# OpenRouter preset tuned for vartodd evolution.
+#
+# Design:
+# - mutation: DeepSeek V4 Pro is the primary code generator; V4 Flash is a
+#   low-probability backup.
+# - insights: colder and more factual than mutation; avoid high-temperature
+#   "causal" invention.
+# - lineage: cold single-model compression, because transition analysis should
+#   be stable and evidence based.
+# - fallback: cheap long-context router for non-critical calls.
+#
+# OpenRouter/DeepSeek rejects forced structured-output tool calls while
+# reasoning/thinking mode is active ("Thinking mode does not support this
+# tool_choice"). The router keeps reasoning enabled by sending DeepSeek schemas
+# as optional tools and parsing either tool_calls or JSON content.
+
+llm:
+  _target_: gigaevo.llm.models.MultiModelRouter
+  _convert_: all
+  name: fallback
+  structured_output_optional_tool_model_prefixes: [deepseek/]
+  models:
+    - _target_: langchain_openai.ChatOpenAI
+      model: deepseek/deepseek-v4-pro
+      api_key: ${oc.env:OPENAI_API_KEY}
+      temperature: 0.30
+      max_tokens: 12288
+      base_url: https://openrouter.ai/api/v1
+      request_timeout: ${request_timeout}
+    - _target_: langchain_openai.ChatOpenAI
+      model: z-ai/glm-4.6
+      api_key: ${oc.env:OPENAI_API_KEY}
+      temperature: 0.25
+      max_tokens: 12288
+      base_url: https://openrouter.ai/api/v1
+      request_timeout: ${request_timeout}
+
+  probabilities: [0.75, 0.25]
+
+llm_mutation:
+  _target_: gigaevo.llm.models.MultiModelRouter
+  _convert_: all
+  name: mutation
+  structured_output_optional_tool_model_prefixes: [deepseek/]
+  models:
+    - _target_: langchain_openai.ChatOpenAI
+      model: deepseek/deepseek-v4-flash
+      api_key: ${oc.env:OPENAI_API_KEY}
+      temperature: 1.05
+      max_tokens: 24576
+      base_url: https://openrouter.ai/api/v1
+      request_timeout: ${request_timeout}
+      extra_body:
+        provider:
+          order: [deepseek]
+          allow_fallbacks: false
+    - _target_: langchain_openai.ChatOpenAI
+      model: z-ai/glm-5.2
+      api_key: ${oc.env:OPENAI_API_KEY}
+      service_tier: flex
+      temperature: 1.05
+      max_tokens: 15192
+      base_url: https://openrouter.ai/api/v1
+      request_timeout: ${request_timeout}
+
+  probabilities: [0.5, 0.5]
+
+llm_insights:
+  _target_: gigaevo.llm.models.MultiModelRouter
+  _convert_: all
+  name: insights
+  structured_output_optional_tool_model_prefixes: [deepseek/]
+  models:
+    - _target_: langchain_openai.ChatOpenAI
+      model: openai/gpt-5-mini
+      api_key: ${oc.env:OPENAI_API_KEY}
+      service_tier: flex
+      temperature: 0.16
+      max_tokens: 16288
+      base_url: https://openrouter.ai/api/v1
+      request_timeout: ${request_timeout}
+    - _target_: langchain_openai.ChatOpenAI
+      model: deepseek/deepseek-v4-flash
+      api_key: ${oc.env:OPENAI_API_KEY}
+      temperature: 0.14
+      max_tokens: 16288
+      base_url: https://openrouter.ai/api/v1
+      request_timeout: ${request_timeout}
+
+  probabilities: [0.70, 0.30]
+
+llm_lineage:
+  _target_: gigaevo.llm.models.MultiModelRouter
+  _convert_: all
+  name: lineage
+  structured_output_optional_tool_model_prefixes: [deepseek/]
+  models:
+    - _target_: langchain_openai.ChatOpenAI
+      model: openai/gpt-5-mini
+      api_key: ${oc.env:OPENAI_API_KEY}
+      service_tier: flex
+      temperature: 0.08
+      max_tokens: 15192
+      base_url: https://openrouter.ai/api/v1
+      request_timeout: ${request_timeout}
+    - _target_: langchain_openai.ChatOpenAI
+      model: deepseek/deepseek-v4-flash
+      api_key: ${oc.env:OPENAI_API_KEY}
+      temperature: 0.14
+      max_tokens: 15288
+      base_url: https://openrouter.ai/api/v1
+      request_timeout: ${request_timeout}
+  probabilities: [0.70, 0.30]

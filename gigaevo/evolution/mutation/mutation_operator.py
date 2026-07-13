@@ -47,6 +47,10 @@ class LLMMutationOperator(MutationOperator):
         strip_comments_and_docstrings: bool = False,
         prompts_dir: str | Path | None = None,
         prompt_fetcher: PromptFetcher | None = None,
+        live_path_store_root_dir: str | Path | None = None,
+        live_path_store_top_k: int = 6,
+        mutation_regime_guidance: list | None = None,
+        mutation_regime_probability: float = 1.0,
     ):
         self.problem_context = problem_context
         self.llm_wrapper = llm_wrapper
@@ -57,6 +61,11 @@ class LLMMutationOperator(MutationOperator):
         self.metrics_formatter = MetricsFormatter(self.metrics_context)
         self.strip_comments_and_docstrings = strip_comments_and_docstrings
         self._prompt_fetcher = prompt_fetcher
+        self.prompts_dir = prompts_dir
+        self.live_path_store_root_dir = live_path_store_root_dir
+        self.live_path_store_top_k = live_path_store_top_k
+        self.mutation_regime_guidance = mutation_regime_guidance
+        self.mutation_regime_probability = mutation_regime_probability
 
         self.agent = create_mutation_agent(
             llm=llm_wrapper,
@@ -65,6 +74,11 @@ class LLMMutationOperator(MutationOperator):
             mutation_mode=mutation_mode,
             prompts_dir=prompts_dir,
             prompt_fetcher=prompt_fetcher,
+            live_path_store_root_dir=live_path_store_root_dir,
+            live_path_store_problem_dir=problem_context.problem_dir,
+            live_path_store_top_k=live_path_store_top_k,
+            mutation_regime_guidance=mutation_regime_guidance,
+            mutation_regime_probability=mutation_regime_probability,
         )
 
         logger.info(
