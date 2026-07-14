@@ -183,6 +183,62 @@ def _restore_env(old: dict[str, Any]) -> None:
             os.environ[k] = v
 
 
+def _is_graceful_timeout(exc: BaseException) -> bool:
+    return exc.__class__.__name__ == "GracefulEvaluationTimeout"
+
+
+def _try_graceful_timeout_salvage(
+    exc: BaseException,
+) -> tuple[Any | None, dict[str, Any] | None]:
+    helper = sys.modules.get("helper")
+    getter = getattr(helper, "get_active_evaluator_best", None) if helper else None
+    if not callable(getter):
+        return (
+            None,
+            {
+                "_error": True,
+                "stderr": (
+                    f"{exc.__class__.__name__}: {exc}\n"
+                    "No helper.get_active_evaluator_best() hook was available."
+                ),
+                "returncode": 1,
+            },
+        )
+
+    try:
+        result = getter()
+    except Exception:
+        buf = io.StringIO()
+        traceback.print_exc(file=buf)
+        return (
+            None,
+            {
+                "_error": True,
+                "stderr": (
+                    f"{exc.__class__.__name__}: {exc}\n"
+                    "Graceful timeout salvage failed:\n"
+                    f"{buf.getvalue()}"
+                ),
+                "returncode": 1,
+            },
+        )
+
+    if result is None:
+        return (
+            None,
+            {
+                "_error": True,
+                "stderr": (
+                    f"{exc.__class__.__name__}: {exc}\n"
+                    "Graceful timeout salvage found no completed best payload."
+                ),
+                "returncode": 1,
+            },
+        )
+
+    return result, None
+
+
 def _run_one(payload: dict[str, Any]) -> tuple[Any | None, dict[str, Any] | None]:
     """
     Execute one payload. Returns (result, None) on success or (None, error_dict) on failure.
@@ -237,6 +293,9 @@ def _run_one(payload: dict[str, Any]) -> tuple[Any | None, dict[str, Any] | None
         return (None, {"_error": True, "stderr": buf.getvalue(), "returncode": 1})
 
     except BaseException as e:
+        if _is_graceful_timeout(e):
+            return _try_graceful_timeout_salvage(e)
+
         # Catch BaseException (not just Exception) so that user code calling
         # sys.exit() or raising SystemExit / KeyboardInterrupt is converted into
         # an error result rather than killing the persistent worker process.

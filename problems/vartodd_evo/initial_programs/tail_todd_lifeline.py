@@ -64,7 +64,7 @@ class Evaluator(BaseEvaluator):
         sampling = SamplingBudget(one_hot="all", sparse=0, dense=dense_samples, sparse_max_weight=2)
         self.set_action_selection(ActionSelection(beamwidth=2, mode="softmax", temperature=0.2))
         self.set_action_pool(ActionPool(final_size=12))
-        self.set_tohpe_search(TohpeSearch(sampling=sampling, pool=SourcePool(keep=12, reserve=0), z_choices=2))
+        self.set_tohpe_search(TohpeSearch(sampling=sampling, pool=SourcePool(keep=2, reserve=0), z_choices=2))
         self.set_todd_search(
             [INITIAL_RANK, TAIL_RANK],
             [

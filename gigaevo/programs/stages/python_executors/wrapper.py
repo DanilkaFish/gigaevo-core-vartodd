@@ -52,24 +52,26 @@ async def _kill_process_tree(proc: asyncio.subprocess.Process) -> None:
 
     try:
         await asyncio.wait_for(proc.wait(), timeout=2.0)
+    except asyncio.CancelledError:
+        raise
     except Exception:
         pass
+    finally:
+        for pipe in (proc.stdin, proc.stdout, proc.stderr):
+            if pipe and hasattr(pipe, "close"):
+                try:
+                    pipe.close()  # type: ignore[union-attr]
+                except Exception:
+                    pass
 
-    for pipe in (proc.stdin, proc.stdout, proc.stderr):
-        if pipe and hasattr(pipe, "close"):
+        # Close the subprocess transport to prevent "Event loop is closed"
+        # warnings from BaseSubprocessTransport.__del__ during GC.
+        transport = getattr(proc, "_transport", None)
+        if transport is not None:
             try:
-                pipe.close()  # type: ignore[union-attr]
+                transport.close()
             except Exception:
                 pass
-
-    # Close the subprocess transport to prevent "Event loop is closed"
-    # warnings from BaseSubprocessTransport.__del__ during GC.
-    transport = getattr(proc, "_transport", None)
-    if transport is not None:
-        try:
-            transport.close()
-        except Exception:
-            pass
 
 
 async def _monitor_rss_limit(
@@ -160,17 +162,17 @@ class WorkerPool:
     async def return_worker(self, proc: asyncio.subprocess.Process) -> None:
         """Return a healthy worker to the pool; if already dead, decrement count and kill."""
         if proc.returncode is not None:
+            await _kill_process_tree(proc)
             async with self._lock:
                 self._count -= 1
-            await _kill_process_tree(proc)
             return
         self._queue.put_nowait(proc)
 
     async def discard_worker(self, proc: asyncio.subprocess.Process) -> None:
         """Remove a dead worker from the pool and kill it."""
+        await _kill_process_tree(proc)
         async with self._lock:
             self._count -= 1
-        await _kill_process_tree(proc)
 
     async def shutdown(self) -> None:
         """Kill all idle workers in the pool.
@@ -232,6 +234,7 @@ async def _run_via_worker(
         stdout = await asyncio.wait_for(proc.stdout.readexactly(n), timeout=timeout)
     except (
         TimeoutError,
+        asyncio.CancelledError,
         asyncio.IncompleteReadError,
         BrokenPipeError,
         ConnectionResetError,

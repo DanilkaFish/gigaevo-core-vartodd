@@ -66,9 +66,9 @@ class Evaluator(BaseEvaluator):
         sparse = self.map_par(lambda x: 20 + int(100 * unit(x)))
         dense = self.map_par(lambda x: 12 + int(92 * unit(x)))
         sparse_max_weight = self.map_par(lambda x: 2 + int(4 * unit(x)))
-        keep = self.map_par(lambda x: 10 + int(14 * unit(x)))
+        keep = self.map_par(lambda x: 18 + int(54 * unit(x)))
         z_choices = self.map_par(lambda x: 4 + int(14 * unit(x)))
-        pool_size = keep
+        pool_size = self.map_par(lambda x: 28 + int(56 * unit(x)))
         reserve = 1
 
         self.set_scores(

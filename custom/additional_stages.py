@@ -447,7 +447,7 @@ class DistillNonMetrics(Stage):
         for key, val in params.data.data.items():
             if isinstance(val, str):
                 non_metrics[key] = val
-        logger.debug(f"[DistillNonMetrics] stage completed with {len(non_metrics)}\n{self.params.data=}")
+        logger.info(f"[DistillNonMetrics] stage completed with {len(non_metrics)}\n{self.params.data=}")
         return Box[dict[str, str]](data=non_metrics)
 
 
@@ -633,7 +633,7 @@ class AuxControlledMutationContextStage(BaseMutationContextStage):
                     metrics_context=self.metrics_context,
                 )
             )
-            logger.info("[{}] Evolutionary statistic data", contexts[-1].format())
+            logger.debug("[{}] Evolutionary statistic data", contexts[-1].format())
 
         if params.memory is not None and params.memory.data.strip():
             contexts.append(MemoryMutationContext(memory_block=params.memory.data))
