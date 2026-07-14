@@ -10,6 +10,8 @@
 #   vartodd_aux_info_stages=[insights,mutation]
 #   vartodd_aux_info_stages=[]
 dag_timeout: 20000
+vartodd_call_timeout: 3200
+vartodd_soft_timeout_grace_s: 200
 
 # Persistent execution cache for initial programs: entrypoint payloads are
 # stored on disk keyed by code+helper hash, so re-running evolution (fresh
@@ -50,8 +52,8 @@ dag_blueprint:
       function_name: entrypoint
       python_path:
         - ${problem.dir}
-      timeout: 3200
-      soft_timeout_grace_s: 200
+      timeout: ${vartodd_call_timeout}
+      soft_timeout_grace_s: ${vartodd_soft_timeout_grace_s}
       cache_dir: ${initial_exec_cache_dir}
       cache_key_files:
         - ${problem.dir}/helper.py

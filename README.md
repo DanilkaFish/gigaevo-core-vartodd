@@ -1,311 +1,382 @@
-# GigaEvo
+# GigaEvo VarTODD Fork
 
-[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+This repository is a public, VarTODD-focused fork of GigaEvo. It keeps the
+GigaEvo execution engine and adds the minimal custom pipeline, configs, prompts,
+and problem payloads needed to evolve VarTODD search programs.
 
-Evolutionary algorithm framework that uses Large Language Models to automatically
-improve programs through iterative mutation and selection (MAP-Elites). Programs
-are Python functions; fitness is task performance. The framework is task-agnostic
-and supports single runs, multi-island evolution, and prompt co-evolution.
+The fork is not meant to expose every upstream GigaEvo example. The runnable
+experiments here are:
 
-## Demo
+- `vartodd_evo`: the current GF(2^7) through GF(2^16) VarTODD evolution target.
+- `vartodd_gf32`: the GF(2^32) VarTODD target.
 
-![Demo](./docs/demos/demo-opt.gif)
+Each evolved program is Python code that builds a VarTODD/FastTODD search
+strategy. The program chooses score shapes, source pools, TOHPE/TODD budgets,
+restart schedules, saved-path loading, and refinement behavior. GigaEvo mutates
+that program with an LLM, executes it through the native `pyvartodd` extension,
+validates the produced path, and keeps diverse candidates with MAP-Elites.
 
-## Getting Started
+## Repository Layout
 
-- **[Quick Start](docs/QUICKSTART.md)** — Get running in 5 minutes
-- **[Architecture Guide](docs/ARCHITECTURE.md)** — System design overview
+- `problems/vartodd_evo/`: GF(2^7) through GF(2^16) problem code, prompts,
+  metrics, and seed programs.
+- `problems/vartodd_gf32/`: GF(2^32) problem code, prompts, metrics, and seed
+  programs.
+- `config/experiment/vartodd_evo_gf16_batch.yaml`: recommended GF(2^16) batch
+  preset.
+- `config/experiment/vartodd_gf32_batch.yaml`: recommended GF(2^32) batch
+  preset.
+- `config/pipeline/vartodd_pipeline.yaml`: VarTODD DAG stages and execution
+  timeout policy.
+- `config/algorithm/vartodd_diverse_gf16.yaml`: MAP-Elites and mutation-regime
+  config for `vartodd_evo`.
+- `config/algorithm/vartodd_diverse_gf32.yaml`: MAP-Elites and mutation-regime
+  config for `vartodd_gf32`.
+- `config/llm/openrouter_vartodd_evolution.yaml`: OpenRouter model routing for
+  mutation, insights, and lineage.
+- `custom/`: VarTODD-specific stages and the batch evolution engine.
+- `npy/`: tracked matrix inputs loaded by the helper code when running from the
+  repository root.
+- `scripts/install_pyvartodd.sh`: builds and installs the native `pyvartodd`
+  extension into `pyvartodd/Release/`.
 
-## Documentation
+The experiment name describes the preset, but the actual target circuit/matrix
+is selected in each problem's `helper.py`. Check `DEFAULT_MATRIX_PATH` there
+before starting a run or when retargeting the problem to another matrix.
 
-| Guide | Description |
-|-------|-------------|
-| [Adversarial Co-Evolution](docs/adversarial_coevolution.md) | Two-population co-evolution guide (generator/discriminator pattern) |
-| [DAG System](docs/DAG_SYSTEM.md) | Execution engine: stages, dependencies, caching |
-| [Evolution Strategies](docs/EVOLUTION_STRATEGIES.md) | MAP-Elites, multi-island, migration |
-| [Memory System](docs/memory.md) | How memory-augmented mutation works (writers, readers, providers, ideas tracker) |
-| [Optuna Optimization](docs/OPTUNA_OPTIMIZATION.md) | LLM-driven hyperparameter sweeps for evolved programs |
-| [Prompt Co-Evolution](docs/COEVOLUTION.md) | Co-evolve mutation prompts alongside programs |
-| [Tools](tools/README.md) | Analysis, debugging, and problem scaffolding utilities |
-| [Usage Guide](docs/USAGE.md) | Detailed usage and Hydra configuration |
-| [Contributing](docs/CONTRIBUTING.md) | Guidelines for contributors |
-| [Changelog](CHANGELOG.md) | Version history |
+## Requirements
 
-## Quick Start
+- Python 3.11+ for GigaEvo. Python 3.12 is the tested environment for the
+  current VarTODD runs.
+- Redis.
+- CMake 3.20+.
+- A C++ compiler with C++23 support.
+- An OpenRouter-compatible API key in `OPENAI_API_KEY`.
+- VarTODD native build dependencies available to CMake.
 
-### 1. Install
-
-**Requirements:** Python 3.11+, Redis
-
-GigaEvo ships with a minimal core and opt-in **extras** so installs stay fast
-on firewalled/slow networks. Pick the install level that matches your use:
-
-| Use case | Command |
-|---|---|
-| **Minimal** — engine + numpy exemplar problems + LLM mutation + core CLI (`status`, `top`, `trajectory`, `logs`, `flush`, `checkpoint`, `inspect`, `launch`, `watchdog`, `export`) | `pip install -e .` |
-| **Common** — also runs chain/NLP problems (HoVer, HotpotQA, IFBench, gsm8k, …) + `gigaevo plot` / `gigaevo events` / `gigaevo profiler` | `pip install -e ".[chains,plotting]"` |
-| **Full** — everything user-facing (chains, optimization, plotting, tracking, local-LLM runtime, memory platform) | `pip install -e ".[all]"` |
-| **Developer** — full + linters, type-checkers, pytest, dag_builder dev API | `pip install -e ".[all,dev,test]"` |
-
-À la carte mapping of features to extras:
-
-| Feature / module | Required extras |
-|---|---|
-| `gigaevo plot`, `gigaevo events`, `gigaevo profiler` | `[plotting]` |
-| Chain/prompt problems: HoVer, HotpotQA, IFBench, gsm8k, musique, papillon, pupa | `[chains]` |
-| Optuna / CMA optimization stages | `[optimization]` |
-| Alphaevolve / hexagon_improver / santa2025 problems (JAX, sympy, shapely) | `[optimization]` |
-| W&B / TensorBoard tracker backends | `[tracking]` |
-| sudoku local-runtime solver (torch + vllm) | `[local-llm]` |
-| GAM memory **platform** backend (`use_api=True`) — local backend needs nothing | `[memory-platform]` |
-| `tools/dag_builder` web API | `[dev]` (uvicorn) |
-
-Install Redis if not already available:
+Install the Python package:
 
 ```bash
-# Ubuntu/Debian
-sudo apt-get install redis-server
-
-# macOS
-brew install redis
-
-# Or run via Docker
-docker run -d -p 6379:6379 redis:7-alpine
+python -m pip install -e .
 ```
 
-### 2. Configure LLM Access
-
-Create a `.env` file with your API key:
+For tests, install the test extra:
 
 ```bash
-OPENAI_API_KEY=sk-or-v1-your-api-key-here
-
-# Optional: Langfuse tracing
-LANGFUSE_PUBLIC_KEY=<key>
-LANGFUSE_SECRET_KEY=<key>
-LANGFUSE_HOST=https://cloud.langfuse.com
+python -m pip install -e ".[test]"
 ```
 
-### 3. Start Redis
+## Build `pyvartodd`
+
+The VarTODD Python extension is not committed. Build it from VarTODD with:
+
+```bash
+scripts/install_pyvartodd.sh
+```
+
+By default the script clones:
+
+```text
+https://github.com/DanilkaFish/VarTodd.git
+```
+
+from branch:
+
+```text
+no-data-scripts
+```
+
+and installs:
+
+```text
+pyvartodd/Release/pyvartodd*.so
+pyvartodd/Release/libcnpy++.so
+```
+
+The installer uses the active `python` unless `PYTHON` is set, so it does not
+force a Python version:
+
+```bash
+PYTHON=/home/danilkaf/pyenv/metaevolve312/bin/python scripts/install_pyvartodd.sh
+```
+
+Useful overrides:
+
+```bash
+VARTODD_SOURCE_DIR=/path/to/VarTodd scripts/install_pyvartodd.sh
+VARTODD_REPO_URL=git@github.com:DanilkaFish/VarTodd.git scripts/install_pyvartodd.sh
+VARTODD_BRANCH=no-data-scripts scripts/install_pyvartodd.sh
+VARTODD_UPDATE=1 scripts/install_pyvartodd.sh
+VARTODD_BUILD_JOBS=16 scripts/install_pyvartodd.sh
+VARTODD_WITH_STUBS=ON scripts/install_pyvartodd.sh
+```
+
+If the extension is installed somewhere else, point the problem helpers to it:
+
+```bash
+VARTODD_PYVARTODD_DIR=/path/to/pyvartodd/Release python run.py ...
+```
+
+## Configure Credentials
+
+Create `.env` or export the variable in your shell:
+
+```bash
+OPENAI_API_KEY=<your-openrouter-api-key>
+```
+
+The configured OpenRouter preset currently routes:
+
+- mutation calls through DeepSeek V4 Flash and GPT-5 Mini;
+- insights through GPT-5 Mini and DeepSeek V4 Flash;
+- lineage through a colder GPT-5 Mini/DeepSeek V4 Flash mix.
+
+Edit `config/llm/openrouter_vartodd_evolution.yaml` if you want different
+models or probabilities.
+
+## Run Evolution
+
+Start Redis:
 
 ```bash
 redis-server
 ```
 
-### 4. Run Evolution
+Run the current GF(2^16) VarTODD experiment:
 
 ```bash
-python run.py problem.name=heilbron
+python run.py problem.name=vartodd_evo experiment=vartodd_evo_gf16_batch
 ```
 
-Evolution starts immediately. Logs are saved to `outputs/`.
-
-## How It Works
-
-1. **Load initial programs** from `problems/<name>/initial_programs/`
-2. **Mutate programs** using LLMs (GPT, Claude, Gemini, Qwen, etc.)
-3. **Evaluate fitness** by running each program's `entrypoint()` + `validate()`
-4. **Select solutions** using MAP-Elites across a behavior space
-5. **Repeat** continuously (steady-state) until a `stopper` (e.g. `max_mutants`,
-   wall-clock, fitness-plateau) fires
-
-```
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│   Problem   │────▶│  Evolution  │────▶│     LLM     │
-│  (programs, │     │   Engine    │     │  (mutation)  │
-│   metrics)  │     │ (MAP-Elites)│     └──────┬──────┘
-└─────────────┘     └──────┬──────┘            │
-                           │                   ▼
-                    ┌──────┴──────┐     ┌─────────────┐
-                    │   Storage   │◀────│  Evaluator   │
-                    │   (Redis)   │     │ (DAG Runner) │
-                    └─────────────┘     └─────────────┘
-```
-
-## Customization
-
-### Experiment Presets
+Run the GF(2^32) experiment:
 
 ```bash
-# Migration bus: parallel runs share rejected programs via Redis stream
-python run.py experiment=migration_bus problem.name=heilbron redis.db=0
-python run.py experiment=migration_bus problem.name=heilbron redis.db=1
-
-# Multi-island evolution (fitness + simplicity islands)
-python run.py experiment=multi_island_complexity problem.name=heilbron
-
-# Multi-LLM exploration (diverse mutation models)
-python run.py experiment=multi_llm_exploration problem.name=heilbron
-
-# Prompt co-evolution (evolve mutation prompts alongside programs)
-python run.py experiment=prompt_coevolution problem.name=heilbron \
-    redis.db=4 prompt_fetcher.prompt_redis_db=6
+python run.py problem.name=vartodd_gf32 experiment=vartodd_gf32_batch
 ```
 
-### Common Overrides
+Use INFO-level console/file logs instead of the default DEBUG logging:
 
 ```bash
-# Cap total mutants (steady-state stopper budget)
-python run.py problem.name=heilbron max_mutants=10
-
-# Use different Redis database
-python run.py problem.name=heilbron redis.db=5
-
-# Change LLM model
-python run.py problem.name=heilbron model_name=anthropic/claude-3.5-sonnet
-
-# Pick a different stopper (wall-clock, fitness-plateau, ...)
-python run.py problem.name=heilbron stopper=wall_clock
-
-# Preview config without running
-python run.py problem.name=heilbron --cfg job
+python run.py problem.name=vartodd_evo experiment=vartodd_evo_gf16_batch logging.level=INFO
 ```
 
-### Prompt Co-Evolution
-
-Co-evolve the mutation prompts alongside your programs. A paired prompt run
-evolves the system prompt used by the mutation LLM, selecting for prompts that
-produce better mutations:
+The `vartodd_evo_gf16_batch` preset expands to the same core choices as:
 
 ```bash
-# Main run — uses co-evolved prompts from DB 6
-python run.py problem.name=my_task pipeline=my_pipeline \
-    prompt_fetcher=coevolved prompt_fetcher.prompt_redis_db=6 redis.db=4
-
-# Prompt run — evolves mutation prompts, reads outcomes from DB 4
-python run.py problem.name=prompt_evolution pipeline=prompt_evolution \
-    redis.db=6 main_redis_db=4 main_redis_prefix=my_task
+python run.py problem.name=vartodd_evo \
+  pipeline=vartodd_pipeline \
+  algorithm=vartodd_diverse_gf16 \
+  llm=openrouter_vartodd_evolution \
+  evolution=batch \
+  num_parents=2
 ```
 
-See [Prompt Co-Evolution Guide](docs/COEVOLUTION.md) for the full architecture,
-launch instructions, and monitoring.
-
-## Configuration
-
-GigaEvo uses [Hydra](https://hydra.cc/) for modular configuration. All config
-files are in `config/`:
-
-| Directory | Purpose | Key files |
-|-----------|---------|-----------|
-| `experiment/` | Complete experiment templates | `base.yaml`, `full_featured.yaml`, `migration_bus.yaml`, `multi_island_complexity.yaml`, `multi_llm_exploration.yaml`, `prompt_coevolution.yaml`, `steady_state_adversarial.yaml` |
-| `algorithm/` | Evolution algorithms | `single_island.yaml`, `single_island_2d.yaml`, `multi_island.yaml`, `topology_3d.yaml` |
-| `llm/` | LLM setups | `single.yaml`, `heterogeneous.yaml`, `heterogeneous_bandit.yaml`, `openrouter_bandit.yaml`, `openrouter_ensemble.yaml` |
-| `pipeline/` | DAG execution pipelines | `auto.yaml` (default), `standard.yaml`, `with_context.yaml`, `custom.yaml`, `prompt_evolution.yaml` |
-| `prompt_fetcher/` | Prompt sourcing | `fixed.yaml`, `coevolved.yaml` |
-| `stopper/` | Stopping criteria | `max_mutants.yaml` (default), `wall_clock.yaml`, `fitness_plateau.yaml` |
-| `constants/` | Tunable parameters | `evolution.yaml`, `llm.yaml`, `islands.yaml`, `pipeline.yaml`, `runner.yaml`, `endpoints.yaml`, `redis.yaml`, `logging.yaml` |
-| `loader/` | Program loading | `directory.yaml`, `redis_selection.yaml` |
-| `logging/` | Backends | `tensorboard.yaml`, `wandb.yaml` |
-
-Override any setting via command line:
-```bash
-python run.py experiment=full_featured max_mutants=50 temperature=0.8
-```
-
-## Creating a Problem
-
-1. Create a directory under `problems/`:
-   ```
-   problems/my_problem/
-   ├── validate.py           # Fitness evaluation
-   ├── metrics.yaml          # Metric specifications
-   ├── task_description.txt  # Problem description for the LLM
-   └── initial_programs/     # Seed programs
-       ├── strategy1.py      # Must define entrypoint()
-       └── strategy2.py
-   ```
-
-2. Run:
-   ```bash
-   python run.py problem.name=my_problem
-   ```
-
-Or use the wizard: `python -m tools.wizard config.yaml`
-
-See `problems/heilbron/` for a complete example.
-
-## Output
-
-Results are saved to `outputs/YYYY-MM-DD/HH-MM-SS/`:
-- **Logs**: `evolution_*.log`
-- **Programs**: Stored in Redis (export with `gigaevo export csv`)
-- **Metrics**: TensorBoard / W&B (if configured)
-
-## CLI Tools (`gigaevo`)
-
-Installed via `pip install -e .`. Global flags: `-e/--experiment`, `-r/--run`, `-f/--format`.
-
-| Command | Purpose |
-|---------|---------|
-| `gigaevo -e EXP status` | Live monitoring: gen, metrics, PIDs, watchdog |
-| `gigaevo -r RUN trajectory` | Gen-by-gen fitness trajectory |
-| `gigaevo -r RUN top` | Inspect best programs by fitness |
-| `gigaevo -e EXP plot comparison -o DIR` | Multi-run fitness curve plots |
-| `gigaevo -e EXP plot arms-race -o DIR` | Dual-panel adversarial arms-race plot |
-| `gigaevo -e EXP profiler` | Profile runner logs into text summary + HTML dashboard |
-| `gigaevo -e EXP manifest gate <status>` | Hard-gate on experiment status (preregistered/implemented/running/complete) |
-| `gigaevo -r RUN export csv -o FILE` | Export evolution data to CSV |
-| `gigaevo flush --db N --confirm` | Safely flush Redis DBs (kills workers first) |
-| `gigaevo -e EXP launch` / `watchdog` | Launch + supervise an experiment |
-| `tools/experiment/archive_run.sh` | Archive run data before flush |
-| `tools/dag_builder/` | Visual DAG pipeline designer |
-| `tools/wizard/` | Interactive problem scaffolding |
-
-See [tools/README.md](tools/README.md) for full CLI reference and Redis key schema.
-
-## Testing
+For a short smoke run:
 
 ```bash
-# Full test suite (uses fakeredis, no Redis server needed)
-python -m pytest
-
-# Specific area
-python -m pytest tests/stages/
-python -m pytest tests/evolution/
-
-# With coverage
-python -m pytest --cov=gigaevo --cov-report=term-missing
-
-# Linting
-ruff check . && ruff format --check .
+python run.py problem.name=vartodd_evo experiment=vartodd_evo_gf16_batch \
+  max_generations=1 \
+  max_mutations_per_generation=1 \
+  max_concurrent_dags=1 \
+  logging.level=INFO
 ```
+
+Even a smoke run can take time if the initial-program execution cache is cold.
+
+## Actual Batch Defaults
+
+The VarTODD presets use `config/evolution/batch.yaml`.
+
+Default batch settings:
+
+- `num_parents=2`
+- `max_elites_per_generation=10`
+- `max_mutations_per_generation=16`
+- `max_concurrent_dags=8`
+- `prefetch_factor=0`
+- `prefetch_extra=0`
+
+The batch engine selects parent combinations, creates a generation of mutants,
+waits for their DAG evaluations, ingests the results, refreshes the archive, and
+then starts the next generation.
+
+Operational overrides are normal Hydra overrides:
+
+```bash
+python run.py problem.name=vartodd_evo experiment=vartodd_evo_gf16_batch \
+  max_concurrent_dags=4 \
+  max_mutations_per_generation=8 \
+  redis.db=1 \
+  logging.level=INFO
+```
+
+## Execution Semantics
+
+`config/pipeline/vartodd_pipeline.yaml` runs this high-level DAG:
+
+1. Validate Python code syntax and basic safety.
+2. Execute `entrypoint()` through `CachedCallProgramFunction`.
+3. Validate the returned VarTODD payload with `validate.py`.
+4. Split validator output into numeric metrics and non-metric aux text.
+5. Add runtime and complexity metrics.
+6. Ensure sentinel metrics exist for failed programs.
+7. Build insights, lineage summaries, execution digests, evolutionary statistics,
+   and mutation context.
+
+Candidate execution for `vartodd_evo` uses:
+
+- hard timeout: `3200` seconds;
+- soft timeout grace: `200` seconds;
+- effective soft deadline: about `3000` seconds after stage start.
+
+The `vartodd_gf32_batch` experiment overrides that policy:
+
+- hard timeout: `13200` seconds;
+- soft timeout grace: `1200` seconds;
+- effective soft deadline: about `12000` seconds after stage start.
+
+The helper checks `GIGAEVO_EXEC_SOFT_DEADLINE_EPOCH`. If the program reaches that
+deadline, it raises `GracefulEvaluationTimeout`. The executor then asks
+`helper.get_active_evaluator_best()` for the best completed payload and returns
+that salvaged result when available. The hard timeout still kills programs that
+do not stop cleanly.
+
+Only initial programs use the persistent execution cache by default:
+
+```text
+problems/<problem>/initial_programs/.exec_cache/
+```
+
+This cache is keyed by the program code and `helper.py`. It avoids re-running
+expensive seeds across fresh Redis runs. Mutants are not cached by default.
+Delete the cache directory to force seed re-evaluation.
+
+## Metrics And Selection
+
+Both VarTODD problems minimize `fitness`.
+
+For `vartodd_evo`, fitness is:
+
+```text
+rank + mean(P)
+```
+
+where `P` is the found decomposition.
+
+For `vartodd_gf32`, fitness also includes shaping around saved-path reuse and
+effective TODD bucket limits. Rank differences are intended to dominate that
+shaping.
+
+MAP-Elites uses a behavior space over:
+
+- primary fitness;
+- runtime;
+- `loaded_rank`;
+- validity.
+
+`loaded_rank` is a strategy descriptor. It separates ab-initio programs from
+saved-path refiners by the rank they started from or branched from; it is not a
+separate objective.
+
+## Redis, Resume, And Fresh Runs
+
+Redis stores programs, metrics, stage results, lineage, and engine state under
+the problem key prefix.
+
+If Redis already contains data and `redis.resume=false`, the run refuses to
+start. Choose one of these:
+
+```bash
+# Continue the same run.
+python run.py problem.name=vartodd_evo experiment=vartodd_evo_gf16_batch redis.resume=true
+
+# Start isolated in another Redis DB.
+python run.py problem.name=vartodd_evo experiment=vartodd_evo_gf16_batch redis.db=1
+
+# Delete DB 0 and start over.
+redis-cli -n 0 FLUSHDB
+```
+
+Pressing Ctrl-C asks the evolution engine and DAG runner to stop. Active
+executor workers are killed so native VarTODD searches should not keep computing
+after shutdown.
+
+## Outputs
+
+Hydra writes each run under:
+
+```text
+outputs/<date>/<time>/
+```
+
+Important local runtime artifacts:
+
+- `outputs/`: Hydra logs and run outputs.
+- `data/path_backups/`: live saved VarTODD paths used by mutation context.
+- `problems/*/initial_programs/.exec_cache/`: initial-program execution cache.
+- `pyvartodd/Release/`: native extension built by `scripts/install_pyvartodd.sh`.
+
+These runtime directories are ignored by git. The root `npy/` matrix directory
+is tracked and required for normal runs from the repository root.
 
 ## Troubleshooting
 
-**Redis database not empty:**
+If `pyvartodd` cannot be imported, build it:
+
 ```bash
-# Flush (kills exec_runner workers first):
-gigaevo flush --db 0 --confirm
-
-# Or use a different DB:
-python run.py redis.db=1
+scripts/install_pyvartodd.sh
 ```
 
-**LLM connection issues:**
+If `libcnpy++.so` is missing or cannot be loaded, rebuild and confirm it exists
+next to the extension:
+
+```text
+pyvartodd/Release/libcnpy++.so
+```
+
+If Redis is not empty:
+
 ```bash
-# Verify API key
-echo $OPENAI_API_KEY
-
-# Test OpenRouter
-curl -H "Authorization: Bearer $OPENAI_API_KEY" https://openrouter.ai/api/v1/models
+python run.py problem.name=vartodd_evo experiment=vartodd_evo_gf16_batch redis.resume=true
 ```
 
-## License
+or use a different Redis DB:
 
-MIT License — see [LICENSE](LICENSE).
-
-## Citation
-
-```bibtex
-@misc{khrulkov2025gigaevoopensourceoptimization,
-      title={GigaEvo: An Open Source Optimization Framework Powered By LLMs And Evolution Algorithms},
-      author={Valentin Khrulkov and Andrey Galichin and Denis Bashkirov and Dmitry Vinichenko and Oleg Travkin and Roman Alferov and Andrey Kuznetsov and Ivan Oseledets},
-      year={2025},
-      eprint={2511.17592},
-      archivePrefix={arXiv},
-      primaryClass={cs.NE},
-      url={https://arxiv.org/abs/2511.17592},
-}
+```bash
+python run.py problem.name=vartodd_evo experiment=vartodd_evo_gf16_batch redis.db=1
 ```
+
+If initial programs keep reusing stale results, delete:
+
+```text
+problems/vartodd_evo/initial_programs/.exec_cache/
+```
+
+or disable the cache for a run:
+
+```bash
+python run.py problem.name=vartodd_evo experiment=vartodd_evo_gf16_batch initial_exec_cache_dir=null
+```
+
+If logs are too verbose:
+
+```bash
+python run.py problem.name=vartodd_evo experiment=vartodd_evo_gf16_batch logging.level=INFO
+```
+
+## Notes For Fork Maintenance
+
+Keep VarTODD-specific changes scoped to:
+
+- `problems/vartodd_evo/`
+- `problems/vartodd_gf32/`
+- `config/experiment/vartodd_*`
+- `config/algorithm/vartodd_*`
+- `config/pipeline/vartodd_pipeline.yaml`
+- `config/llm/openrouter_vartodd_evolution.yaml`
+- `custom/`
+- `scripts/install_pyvartodd.sh`
+- executor fixes needed for soft-deadline salvage and clean shutdown.
+
+Avoid committing generated run outputs, local path backups, native build
+artifacts, or old copied experiment folders.

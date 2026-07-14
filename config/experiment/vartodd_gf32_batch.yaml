@@ -12,3 +12,5 @@ problem:
   name: vartodd_gf32
 
 num_parents: 2
+vartodd_call_timeout: 13200
+vartodd_soft_timeout_grace_s: 1200
