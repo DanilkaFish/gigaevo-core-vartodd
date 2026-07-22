@@ -65,11 +65,13 @@ Listing `lst:gf32_best_final_program` represents generation-6 program
   and a rank schedule using finite cap 30937 through rank 1225 and full search
   below it.
 
-Generation annotations follow the actual winner ancestry: G1 established the
-PSO/beam-2/TOHPE baseline and produced the 1235 path; G2 introduced saved-path
-refinement and effective TODD retention; G4 reached 1197 with full tail TODD;
-G5 produced the exact `fc0b0d69` path and introduced cost-aware cap scheduling;
-G6 reopened that path and combined the final settings.
+Generation annotations distinguish the winner's program ancestry from shared
+path-store provenance. G1 established the PSO/beam-2/TOHPE baseline and
+produced the 1235 path; G2 introduced saved-path refinement and effective TODD
+retention; G4 reached 1197 with full tail TODD; G5 program `fc0b0d69` produced
+the exact path later selected through the path store, but was not a direct
+program parent; G6 reopened that path while combining code from direct parents
+`04b87669` (G5) and `a592774c` (G2).
 
 ## Evidence-aware commentary
 
