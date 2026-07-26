@@ -50,6 +50,14 @@ def _compose(*overrides: str):
         )
 
 
+def _compose_with_experiment_problem(*overrides: str):
+    """Compose an experiment that supplies its own required problem name."""
+    with initialize_config_dir(
+        config_dir=str(CONFIG_DIR.absolute()), version_base=None
+    ):
+        return compose(config_name="config", overrides=list(overrides))
+
+
 def _group_choices(group: str) -> list[str]:
     """Return non-private YAML stems in a config group directory."""
     return [
@@ -120,6 +128,48 @@ def test_experiment_variant_composes(variant: str):
     assert _exists(cfg, "dag_blueprint"), (
         f"dag_blueprint missing with experiment={variant}"
     )
+
+
+def test_vartodd_tohpe_updated_steady_experiment_contract():
+    cfg = _compose_with_experiment_problem(
+        "experiment=vartodd_evo_tohpe_updated_steady"
+    )
+
+    assert cfg.problem.name == "vartodd_evo_tohpe_updated"
+    assert (
+        cfg.evolution_engine._target_
+        == "gigaevo.evolution.engine.SteadyStateEvolutionEngine"
+    )
+    assert cfg.num_parents == 2
+
+    # Six DAGs execute while another six are pre-created and wait on the
+    # runner semaphore.
+    assert cfg.runner_config.max_concurrent_dags == 6
+    assert cfg.runner_config.prefetch_factor == 2
+
+    # The steady engine's two-semaphore pipeline uses six producer slots and
+    # six completed-mutation buffer slots.
+    assert cfg.engine_config.max_in_flight == 6
+
+    # Keep the proven GF16 weighted selector. Steady state requests one pair
+    # from it per mutation instead of constructing a batch parent pool.
+    selector = cfg.islands[0].elite_selector
+    assert (
+        selector._target_
+        == "gigaevo.evolution.strategies.map_elites.WeightedEliteSelector"
+    )
+    assert selector.lambda_ == 5.0
+
+    regimes = cfg.mutation_operator.mutation_regime_guidance
+    assert [regime.probability for regime in regimes] == [0.55, 0.45]
+    guidance = " ".join(
+        "\n".join(regime.text for regime in regimes).split()
+    )
+    assert "standalone TOHPE sampling modest" in guidance
+    assert "one-hot and low-weight sparse" in guidance
+    assert "TOHPEprefix" in guidance
+    assert "cheaper but less expressive than full TODD" in guidance
+    assert "10 researched" not in guidance
 
 
 @pytest.mark.parametrize("variant", _group_choices("algorithm"))

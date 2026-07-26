@@ -1,0 +1,55 @@
+# @package _global_
+
+# GF(2^16) MAP-Elites variant for the updated three-source interface.
+# Inherit archive, retention, and parent-selection behavior; specialize only
+# the mutation regimes that guide source choice and sampling.
+defaults:
+  - vartodd_diverse_gf16
+  - _self_
+
+mutation_operator:
+  mutation_regime_guidance:
+    - probability: 0.55
+      text: |
+        ## Possible Mutation Regime
+        Regime: ab-initio search and wide-margin exploration.
+
+        Build fresh via Evaluator(path_name="init", ...), or reopen a
+        near_tail_paths or wide_margin_paths entry with margin 50..140 to
+        branch above the degenerate near-final funnel. The goal is to explore
+        new territory and deposit a reusable near-final path.
+
+        Keep standalone TOHPE sampling modest by default. Prefer one-hot and
+        low-weight sparse samples to large dense budgets. Raise standalone
+        TOHPE sampling only when execution evidence shows that it still
+        contributes useful accepted actions, and do not increase any sample
+        budget after its effective unique coefficient space is saturated.
+
+        Use TOHPEprefix for broader intermediate search: it is cheaper but
+        less expressive than full TODD. Reserve full TODD for difficult rank
+        regions where standalone TOHPE and TOHPEprefix stop finding useful
+        actions. If the parent repeatedly returns the same rank, change the
+        source mix, optimizer, score shape, beamwidth, restart, or schedule.
+    - probability: 0.45
+      text: |
+        ## Possible Mutation Regime
+        Regime: exploit a saved path according to its Live Path Store group.
+
+        Use Evaluator(path_name=<live_path_name>,
+        margin=<evidence_based_margin>) with a visible name from
+        near_tail_paths or wide_margin_paths. Never invent names or load
+        dead_end_paths/best_nonimproved_child_paths. Actually load the chosen
+        path and try to beat loaded_path_rank.
+
+        Keep standalone TOHPE sampling modest. Prefer one-hot and low-weight
+        sparse samples, and raise its budget only when the loaded-region
+        evidence shows useful accepted TOHPE actions. Use TOHPEprefix as the
+        intermediate reduced-space search before escalating to full TODD.
+        Do not increase a sample budget after its effective unique coefficient
+        space is saturated.
+
+        - near_tail_paths: limit_bucket=-1 can surface actions that a capped
+          TOHPEprefix or TODD search never reaches.
+        - wide_margin_paths: use a medium-to-wide margin (30..100, scaled to
+          failed reuses) and make a meaningful source or policy change instead
+          of repeating a small local adjustment.
