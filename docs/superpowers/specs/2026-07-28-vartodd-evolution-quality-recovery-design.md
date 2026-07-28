@@ -106,6 +106,32 @@ tail, collapsed decoded profiles, unsuitable population coverage, or a restart
 that produced no new configurations. A policy-only hypothesis should normally
 preserve the optimizer so the result remains attributable.
 
+## Score Priority
+
+Exploration and finalization scores are normally the most influential mapped
+policy parameters:
+
+- `ExplorationScore` determines which generated candidates survive source-pool
+  filtering and enter the merged action pool.
+- `FinalizationScore` determines which retained candidates remain competitive
+  for action selection.
+- A sign or scale error can systematically discard the rare high-reduction
+  action that expensive TODD research produced.
+- Score weights affect every reached rank step, while many sampling, pool, and
+  bucket parameters bind only in particular bands.
+
+Therefore initial programs and mutations should preserve meaningful score
+weight freedom before exposing many low-level budget knobs. When candidates
+are generated but useful source contributions disappear between `src` and
+`pool`, or a sufficiently filled pool does not translate into descent, score
+weights are the first policy parameters to inspect.
+
+Scores are not a substitute for generation. They cannot select an action that
+TOHPE, TOHPEprefix, or TODD never generated. When all relevant source counts
+are near zero, generation and z/y coverage remain the primary bottleneck.
+Score centers are lower-priority than weights and should normally be fixed
+unless execution evidence shows that displacement matters.
+
 ## Parameter-Dimension Policy
 
 The six initial programs form a portfolio:
@@ -123,6 +149,11 @@ literals by default:
 - settings for disabled or ineffective sources;
 - duplicated controls that move the same cost/behavior together;
 - schedule values for unreachable rank bands.
+
+Within each program's dimension budget, score weights receive priority. A
+typical compact program should devote most continuous dimensions to
+exploration/finalization weights and expose only the few source, pool, bucket,
+or selection controls that define its distinct search mechanism.
 
 Evolution may create a program above 24 dimensions, but its code and
 justification must match dimension to credible optimizer coverage. The prompt
@@ -173,6 +204,8 @@ New source-level contracts will verify:
 - y-per-z saturation is explicitly separated from z coverage;
 - the prompt requires one primary causal hypothesis and controlled variables;
 - optimizer changes require optimizer evidence;
+- score weights are documented as the highest-priority mapped policy
+  parameters without claiming that scores can repair missing generation;
 - the grouped TOHPE seed jointly optimizes before score-only refinement and
   does not branch between those stages;
 - each initial program's mapped-parameter count falls in its assigned compact
@@ -184,4 +217,3 @@ New source-level contracts will verify:
 
 Existing action-API and parameter-group tests remain applicable. Legacy prompt
 tests for obsolete problem copies are not extended.
-
