@@ -217,10 +217,19 @@ def test_heavy_restart_declares_scout_and_tail_before_selecting_one() -> None:
 
 def test_all_bucket_retention_is_at_least_two() -> None:
     for filename, tree in _program_trees().items():
+        assignments = {
+            node.targets[0].id: node.value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+        }
         for node in ast.walk(tree):
             if not isinstance(node, ast.keyword) or node.arg != "actions_per_bucket":
                 continue
             value = node.value
+            if isinstance(value, ast.Name):
+                value = assignments[value.id]
             if isinstance(value, ast.Constant):
                 assert value.value >= 2, f"{filename}:{node.lineno}"
                 continue
@@ -231,13 +240,15 @@ def test_all_bucket_retention_is_at_least_two() -> None:
             assert value.args[0].value >= 2, f"{filename}:{node.lineno}"
 
 
-def test_hard_tail_has_a_bounded_reduced_bucket_cap() -> None:
+def test_hard_tail_escalates_from_finite_to_full_todd() -> None:
     source = _program_sources()["todd_hard_tail_budget_split.py"]
 
-    assert "tail_cap = self.int_range(6_000, 24_000)" in source
-    assert "80_000" not in source
-    assert "FIRST_STAGE_BUDGET = 48" in source
-    assert "RESTART_BUDGET = 32" in source
+    assert "EARLY_TODD_LIMIT = 512" in source
+    assert "limit_bucket=EARLY_TODD_LIMIT" in source
+    assert "max_buckets=100_000" in source
+    assert "limit_bucket=-1" in source
+    assert "FIRST_STAGE_BUDGET = 64" in source
+    assert "RESTART_BUDGET = 48" in source
 
 
 def test_optimizer_dependencies_are_available() -> None:
