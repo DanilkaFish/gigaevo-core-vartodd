@@ -47,10 +47,19 @@ class Evaluator(BaseEvaluator):
         self.set_scores(
             PolicyScores(
                 ExplorationScore(
-                    [self.float_range(-3.5, 3.5) for _ in range(5)], centers=[0.0, 0.5, 0.0, 0.5, 0.0], pow=1
+                    [self.float_range(-3.5, 3.5) for _ in range(5)], centers=[0.0, 0.0, 0.0, 0.0, 0.0], pow=1
                 ),
                 FinalizationScore(
-                    [self.float_range(-3.5, 3.5) for _ in range(6)], centers=[0.0, 0.5, 0.0, 0.5, 0.0, 0.0], pow=1
+                    [self.float_range(-3.5, 3.5) for _ in range(6)],
+                    centers=[
+                        0.0,
+                        0.0,
+                        0.0,
+                        self.float_range(0.0, 1.0),
+                        self.float_range(0.0, 1.0),
+                        0.0,
+                    ],
+                    pow=1,
                 ),
             )
         )

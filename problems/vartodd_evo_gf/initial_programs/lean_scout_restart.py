@@ -42,10 +42,12 @@ class Evaluator(BaseEvaluator):
 
     def policy_mapping(self):
         exploration = ExplorationScore(
-            [self.float_range(-4, 4) for _ in range(5)], centers=[0.0, 0.5, 0.0, 0.5, 0.0], pow=1
+            [self.float_range(-4, 4) for _ in range(5)], centers=[0.0, 0.0, 0.0, 0.0, 0.0], pow=1
         )
         finalization = FinalizationScore(
-            [self.float_range(-4, 4) for _ in range(6)], centers=[0.0, 0.5, 0.0, 0.5, 0.0, 0.0], pow=1
+            [self.float_range(-4, 4) for _ in range(6)],
+            centers=[0.0, 0.0, 0.0, self.float_range(0.0, 1.0), 0.0, 0.0],
+            pow=1,
         )
         self.set_scores(PolicyScores(exploration=exploration, final=finalization))
         samples = SamplingBudget(

@@ -28,19 +28,19 @@ EXPECTED_OPTIMIZERS = {
 }
 EXPECTED_PARAMETER_COUNTS = {
     "beam3_temp_probe.py": 18,
-    "full_pso_pyswarms.py": 24,
+    "full_pso_pyswarms.py": 26,
     "lean_beam_de.py": 18,
-    "lean_scout_restart.py": 18,
-    "todd_hard_tail_budget_split.py": 19,
-    "tohpe_weights_budget_probe.py": 17,
+    "lean_scout_restart.py": 19,
+    "todd_hard_tail_budget_split.py": 21,
+    "tohpe_weights_budget_probe.py": 18,
 }
 EXPECTED_SEMANTIC_DIGESTS = {
-    "beam3_temp_probe.py": "8934e663ea2d06df6a75bccf10a3ae63a6951c3e8bce9c155b35348af4d356c0",
-    "full_pso_pyswarms.py": "5bab187efa5747d72e21284867a385e6c8bf39354c7549b346a77f2390827d92",
-    "lean_beam_de.py": "08e98cd413da509f38d1111f1292bc602d0955ad4077d022351b115d7f80e02a",
-    "lean_scout_restart.py": "2688902355981ee76966f839886a5f604a19210f9f5623ebf606f85af23c5988",
-    "todd_hard_tail_budget_split.py": "59f87f6e353fea4647bcd6cd1c7ee714dfb39d08b64513d4d08e40a9e240a6b1",
-    "tohpe_weights_budget_probe.py": "2a90b8c13bf796d34a2d8aae029f86c4ce4fcfd321d033ebe38e06ec694d2f8b",
+    "beam3_temp_probe.py": "c8e2984037e5c2516333e379eb2cdec737434fd52b0f9624f03dd2b513089ae6",
+    "full_pso_pyswarms.py": "73d3b97d71a523680a536f1b969b2a324a2715c2e6212f8fd3855448c9803851",
+    "lean_beam_de.py": "46cb3ebb523f6c46fe8fd750b6955810863ae93133d794256aa49ac9bf8a0f4c",
+    "lean_scout_restart.py": "652e16d9da9995fe50b7594300eb8e5cd8a306132bd6bb5382b77463037098fe",
+    "todd_hard_tail_budget_split.py": "f70866c0501b7d5ac553f5e6f7c79a255aad83ea360e714e9ef67b3d6c6ce1d6",
+    "tohpe_weights_budget_probe.py": "670020d87c090ac181fb7fe57efae338e82b749d23fc6bf2385104fa50177494",
 }
 
 
@@ -285,8 +285,9 @@ def test_initial_program_parameter_portfolio() -> None:
     }
 
     assert actual_counts == EXPECTED_PARAMETER_COUNTS
-    assert sum(value <= 18 for value in actual_counts.values()) == 4
+    assert sum(value <= 18 for value in actual_counts.values()) == 3
     assert sum(19 <= value <= 24 for value in actual_counts.values()) == 2
+    assert sum(value > 24 for value in actual_counts.values()) == 1
 
 
 def test_grouped_tohpe_jointly_optimizes_before_score_refinement() -> None:
