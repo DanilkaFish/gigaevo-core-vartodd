@@ -77,3 +77,19 @@ def test_task_context_describes_evidence_without_prescribing_response() -> None:
         "do not imply fixed properties",
     ):
         assert neutral in text
+
+
+def test_task_context_clarifies_groups_and_schedule_setters() -> None:
+    text = TASK_DESCRIPTION.read_text(encoding="utf-8")
+
+    assert "Every `map_par` call must pass `group=` explicitly" in text
+    assert "must already have been declared" in text
+    assert "complete parameter layout must remain identical" in text
+    assert "constructors describe one configuration" in text
+    assert (
+        "Never mix a positional configuration with `ranks=` or `values=`"
+        in text
+    )
+    assert "ActionPool(ranks=" in text
+    assert "set_action_pool(early_pool, ranks=" in text
+    assert text.count("### Rank schedules") == 1
