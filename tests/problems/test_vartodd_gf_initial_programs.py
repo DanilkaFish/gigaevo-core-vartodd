@@ -107,6 +107,42 @@ def _method_calls(tree: ast.Module, method: str) -> list[ast.Call]:
     ]
 
 
+def _score_centers(tree: ast.Module, score_type: str) -> list[ast.expr]:
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == score_type
+    ]
+    assert len(calls) == 1
+    centers = next(
+        keyword.value for keyword in calls[0].keywords if keyword.arg == "centers"
+    )
+    assert isinstance(centers, ast.List)
+    return centers.elts
+
+
+def _is_zero(node: ast.expr) -> bool:
+    return isinstance(node, ast.Constant) and node.value == 0.0
+
+
+def _center_mapping_group(node: ast.expr) -> str | None:
+    assert isinstance(node, ast.Call)
+    assert isinstance(node.func, ast.Attribute)
+    assert isinstance(node.func.value, ast.Name) and node.func.value.id == "self"
+    assert node.func.attr == "float_range"
+    assert [ast.literal_eval(argument) for argument in node.args] == [0.0, 1.0]
+    group = next(
+        (keyword.value for keyword in node.keywords if keyword.arg == "group"),
+        None,
+    )
+    if group is None:
+        return None
+    assert isinstance(group, ast.Constant) and isinstance(group.value, str)
+    return group.value
+
+
 def _literal_group_arguments(call: ast.Call) -> tuple[str, ...]:
     values: list[str] = []
     for argument in call.args:
@@ -169,6 +205,39 @@ def test_initial_pool_has_six_distinct_optimizer_roles() -> None:
     }
     assert actual == EXPECTED_OPTIMIZERS
     assert len(set(actual.values())) == 6
+
+
+def test_initial_program_score_center_portfolio() -> None:
+    expected_final_mappings = {
+        "beam3_temp_probe.py": (),
+        "full_pso_pyswarms.py": (1, 3),
+        "lean_beam_de.py": (),
+        "lean_scout_restart.py": (3,),
+        "todd_hard_tail_budget_split.py": (3, 4),
+        "tohpe_weights_budget_probe.py": (4,),
+    }
+    grouped_programs = {
+        "full_pso_pyswarms.py",
+        "tohpe_weights_budget_probe.py",
+    }
+
+    for name, tree in _program_trees().items():
+        exploration = _score_centers(tree, "ExplorationScore")
+        finalization = _score_centers(tree, "FinalizationScore")
+
+        assert len(exploration) == 5
+        assert all(_is_zero(center) for center in exploration), name
+        assert len(finalization) == 6
+
+        mapped_indices = tuple(
+            index
+            for index, center in enumerate(finalization)
+            if not _is_zero(center)
+        )
+        assert mapped_indices == expected_final_mappings[name]
+        for index in mapped_indices:
+            expected_group = "scores" if name in grouped_programs else None
+            assert _center_mapping_group(finalization[index]) == expected_group
 
 
 def test_initial_program_semantics_and_hyperparameters_are_frozen() -> None:
