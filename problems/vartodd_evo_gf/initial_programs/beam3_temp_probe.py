@@ -1,5 +1,4 @@
 from collections.abc import Iterable
-
 from helper import (
     ActionPool,
     ActionSelection,
@@ -32,57 +31,29 @@ class Evaluator(BaseEvaluator):
     expensive tail enumeration."""
 
     def float_range(self, low: float, high: float) -> float:
-        """A gentle logistic leaves a wide useful zone for stochastic beams."""
-        return self.map_par(
-            lambda x: low
-            + (high - low) / (1.0 + np.exp(-np.clip(float(x), -8.0, 8.0) / 2.5))
-        )
+        return self.map_par(lambda x: low + (high - low) / (1.0 + np.exp(-np.clip(float(x), -8.0, 8.0) / 2.5)))
 
     def int_range(self, low: int, high: int) -> int:
-        """The same gentle curve makes medium width budgets easy to select."""
         return self.map_par(
-            lambda x: min(
-                high,
-                low
-                + int(
-                    (high - low + 1)
-                    / (1.0 + np.exp(-np.clip(float(x), -8.0, 8.0) / 2.5))
-                ),
-            )
+            lambda x: min(high, low + int((high - low + 1) / (1.0 + np.exp(-np.clip(float(x), -8.0, 8.0) / 2.5))))
         )
 
     def policy_mapping(self):
         self.set_scores(
             PolicyScores(
-                ExplorationScore(
-                    [self.float_range(-4, 4) for _ in range(5)],
-                    centers=[0.0, 0.5, 0.0, 0.5, 0.0],
-                    pow=1,
-                ),
+                ExplorationScore([self.float_range(-4, 4) for _ in range(5)], centers=[0.0, 0.5, 0.0, 0.5, 0.0], pow=1),
                 FinalizationScore(
-                    [self.float_range(-4, 4) for _ in range(6)],
-                    centers=[0.0, 0.5, 0.0, 0.5, 0.0, 0.0],
-                    pow=1,
+                    [self.float_range(-4, 4) for _ in range(6)], centers=[0.0, 0.5, 0.0, 0.5, 0.0, 0.0], pow=1
                 ),
             )
         )
         prefix_samples = SamplingBudget(
-            one_hot=32,
-            sparse=self.int_range(0, 12),
-            dense=self.int_range(4, 18),
-            sparse_max_weight=2,
+            one_hot=32, sparse=self.int_range(0, 12), dense=self.int_range(4, 18), sparse_max_weight=2
         )
-        todd_samples = SamplingBudget(
-            one_hot=8,
-            sparse=2,
-            dense=0,
-            sparse_max_weight=2,
-        )
-        prefix_cap = self.int_range(4_000, 30_000)
-        todd_cap = self.int_range(1_024, 6_000)
-        self.set_action_selection(
-            ActionSelection(beamwidth=3, mode="softmax", temperature=0.35)
-        )
+        todd_samples = SamplingBudget(one_hot=8, sparse=2, dense=0, sparse_max_weight=2)
+        prefix_cap = self.int_range(4000, 30000)
+        todd_cap = self.int_range(1024, 6000)
+        self.set_action_selection(ActionSelection(beamwidth=3, mode="softmax", temperature=0.35))
         self.set_action_pool(ActionPool(final_size=self.int_range(24, 48)))
         self.set_tohpe_search(
             TohpeSearch(
@@ -96,11 +67,7 @@ class Evaluator(BaseEvaluator):
                 prefix_samples,
                 SourcePool(keep=self.int_range(8, 20), reserve=2),
                 actions_per_bucket=2,
-                buckets=ZBucketSearch(
-                    min_buckets=64,
-                    max_buckets=prefix_cap,
-                    limit_bucket=prefix_cap,
-                ),
+                buckets=ZBucketSearch(min_buckets=64, max_buckets=prefix_cap, limit_bucket=prefix_cap),
             )
         )
         self.set_todd_search(
@@ -108,9 +75,7 @@ class Evaluator(BaseEvaluator):
                 todd_samples,
                 SourcePool(keep=self.int_range(6, 12), reserve=2),
                 actions_per_bucket=3,
-                buckets=ZBucketSearch(
-                    min_buckets=50, max_buckets=todd_cap, limit_bucket=todd_cap
-                ),
+                buckets=ZBucketSearch(min_buckets=50, max_buckets=todd_cap, limit_bucket=todd_cap),
             )
         )
 
@@ -131,24 +96,14 @@ class Problem(ElementwiseProblem):
 
 def optimize(evaluator: Evaluator, evaluations: int, seed: int) -> np.ndarray:
     algorithm = PSO(pop_size=12, w=0.7, c1=0.4, c2=0.4, adaptive=False)
-    result = minimize(
-        Problem(evaluator),
-        algorithm,
-        termination=("n_eval", evaluations),
-        seed=seed,
-        verbose=False,
-    )
-    return np.asarray(
-        result.X if result.X is not None else evaluator.extract_active(), dtype=float
-    )
+    result = minimize(Problem(evaluator), algorithm, termination=("n_eval", evaluations), seed=seed, verbose=False)
+    return np.asarray(result.X if result.X is not None else evaluator.extract_active(), dtype=float)
 
 
 def entrypoint():
     evaluator = Evaluator(path_name="init", max_depth=500)
     params = optimize(evaluator, SCOUT_EVALS, seed=23)
-    params = evaluator.set_up_new_init(
-        0, rank_thr=evaluator.best_rank + MID_REOPEN_MARGIN, xopt=params
-    )
+    params = evaluator.set_up_new_init(0, rank_thr=evaluator.best_rank + MID_REOPEN_MARGIN, xopt=params)
     if params is not None:
         optimize(evaluator, MID_REFINE_EVALS, seed=26)
     return evaluator.get_best()

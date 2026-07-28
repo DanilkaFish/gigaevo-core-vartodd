@@ -1,5 +1,4 @@
 from collections.abc import Iterable
-
 from helper import (
     ActionPool,
     ActionSelection,
@@ -25,76 +24,45 @@ N_EVAL = 288
 
 
 class Evaluator(BaseEvaluator):
-
     def float_range(self, low: float, high: float) -> float:
-        return self.map_par(
-            lambda x: low + (high - low) * np.clip((float(x) + 1.5) / 3.0, 0.0, 1.0)
-        )
+        return self.map_par(lambda x: low + (high - low) * np.clip((float(x) + 1.5) / 3.0, 0.0, 1.0))
 
     def int_range(self, low: int, high: int) -> int:
         return self.map_par(
-            lambda x: min(
-                high,
-                low + int((high - low + 1) * np.clip((float(x) + 1.5) / 3.0, 0.0, 1.0)),
-            )
+            lambda x: min(high, low + int((high - low + 1) * np.clip((float(x) + 1.5) / 3.0, 0.0, 1.0)))
         )
 
     def policy_mapping(self):
         self.set_scores(
             PolicyScores(
-                ExplorationScore(
-                    [self.float_range(-4, 4) for _ in range(5)],
-                    centers=[0.0, 0.5, 0.0, 0.5, 0.0],
-                    pow=1,
-                ),
+                ExplorationScore([self.float_range(-4, 4) for _ in range(5)], centers=[0.0, 0.5, 0.0, 0.5, 0.0], pow=1),
                 FinalizationScore(
-                    [self.float_range(-4, 4) for _ in range(6)],
-                    centers=[0.0, 0.5, 0.0, 0.5, 0.0, 0.0],
-                    pow=1,
+                    [self.float_range(-4, 4) for _ in range(6)], centers=[0.0, 0.5, 0.0, 0.5, 0.0, 0.0], pow=1
                 ),
             )
         )
-        samples = SamplingBudget(
-            one_hot="all",
-            sparse=8,
-            dense=self.int_range(8, 40),
-            sparse_max_weight=2,
-        )
-        prefix_cap = self.int_range(2_000, 24_000)
-        todd_cap = self.int_range(512, 6_000)
-        self.set_action_selection(
-            ActionSelection(beamwidth=2, mode="softmax", temperature=0.16)
-        )
+        samples = SamplingBudget(one_hot="all", sparse=8, dense=self.int_range(8, 40), sparse_max_weight=2)
+        prefix_cap = self.int_range(2000, 24000)
+        todd_cap = self.int_range(512, 6000)
+        self.set_action_selection(ActionSelection(beamwidth=2, mode="softmax", temperature=0.16))
         self.set_action_pool(ActionPool(final_size=self.int_range(12, 28)))
-        self.set_tohpe_search(
-            TohpeSearch(
-                samples,
-                SourcePool(keep=6, reserve=1),
-                z_choices=4,
-            )
-        )
+        self.set_tohpe_search(TohpeSearch(samples, SourcePool(keep=6, reserve=1), z_choices=4))
         self.set_tohpeprefix_search(
             TohpePrefixSearch(
                 samples,
                 SourcePool(keep=self.int_range(4, 12), reserve=2),
                 actions_per_bucket=2,
                 buckets=ZBucketSearch(
-                    min_buckets=self.int_range(32, 256),
-                    max_buckets=prefix_cap,
-                    limit_bucket=prefix_cap,
+                    min_buckets=self.int_range(32, 256), max_buckets=prefix_cap, limit_bucket=prefix_cap
                 ),
             )
         )
         self.set_todd_search(
             ToddSearch(
-                SamplingBudget(
-                    one_hot=8, sparse=2, dense=0, sparse_max_weight=2
-                ),
+                SamplingBudget(one_hot=8, sparse=2, dense=0, sparse_max_weight=2),
                 SourcePool(keep=self.int_range(2, 5), reserve=1),
                 actions_per_bucket=2,
-                buckets=ZBucketSearch(
-                    min_buckets=16, max_buckets=todd_cap, limit_bucket=todd_cap
-                ),
+                buckets=ZBucketSearch(min_buckets=16, max_buckets=todd_cap, limit_bucket=todd_cap),
             )
         )
 
@@ -116,11 +84,5 @@ class Problem(ElementwiseProblem):
 def entrypoint():
     evaluator = Evaluator(path_name="init", max_depth=500)
     algorithm = DE(pop_size=16, variant="DE/rand/1/bin", CR=0.9, F=0.6)
-    minimize(
-        Problem(evaluator),
-        algorithm,
-        termination=("n_eval", N_EVAL),
-        seed=17,
-        verbose=False,
-    )
+    minimize(Problem(evaluator), algorithm, termination=("n_eval", N_EVAL), seed=17, verbose=False)
     return evaluator.get_best()
