@@ -183,8 +183,11 @@ n_var = len(evaluator.extract_active())
 ### Grouped active parameters
 
 `map_par(mapping, group="<semantic-name>")` assigns a stable full-`x0` slot
-to a named optimization group. Calls without `group=` belong to `"default"`.
-All groups are active unless the program explicitly selects a subset.
+to a named optimization group. Every `map_par` call must pass `group=` explicitly,
+including `group="default"` when intentional. A name selected by
+`select_parameter_groups(...)` must already have been declared by at least one
+`map_par(..., group="<name>")` call. All groups are active unless explicitly
+selected otherwise.
 
 Use groups when different optimizer stages should tune different parts of one
 policy:
@@ -218,7 +221,9 @@ Select groups before constructing the optimizer problem. Every selection
 change can alter its dimension and coordinate meaning, so rebuild the optimizer
 and do not reuse its population, covariance, bounds, or previous active vector.
 Use a few stable semantic groups such as `"scores"`, `"sampling"`, and
-`"pools"`; do not make declarations conditional on optimized values.
+`"pools"`. Group names, parameter declaration order, and the complete
+parameter layout must remain identical across every `reinit()` and restart;
+policy branches must not conditionally add or remove `map_par` calls.
 
 `set_up_new_init(path_num, rank_thr, xopt=None)` branches from an in-memory
 best path and returns the new active vector, or `None`. Guard the return and
@@ -359,6 +364,10 @@ actions. A wider beam over one or two candidates mostly multiplies cost.
 
 ### Rank schedules
 
+Policy constructors describe one configuration; schedules belong only in the
+corresponding `set_*` method. Never mix a positional configuration with
+`ranks=` or `values=`.
+
 Every policy setter accepts either one configuration, which remains active at
 all ranks, or an aligned `ranks=[...]`, `values=[...]` schedule:
 
@@ -379,6 +388,12 @@ self.set_todd_search(
     ranks=[INITIAL_RANK, SWITCH_RANK],
     values=[early_todd, late_todd],
 )
+
+# Invalid: constructors do not accept schedules.
+ActionPool(ranks=[INITIAL_RANK, SWITCH_RANK], values=[early_pool, late_pool])
+
+# Invalid: do not mix setter forms.
+self.set_action_pool(early_pool, ranks=[SWITCH_RANK], values=[late_pool])
 ```
 
 Here `early_todd` is active first. Once descent reaches `SWITCH_RANK` or lower,
@@ -495,6 +510,15 @@ a simple generational method:
 actual objective calls = population size * generations
 FastTODD runs = actual objective calls * seeds per objective call
 ```
+
+The per-program runtime budget is the current `runtime` upper bound, equal to
+`vartodd_call_timeout`. Estimate cost from objective calls × seeds × policy
+cost. If optimization remains productive and finishes far below this budget,
+remaining time can support more distinct parameter evaluations or another
+justified stage. Running into the soft timeout is safe because the best
+completed path can be salvaged, but `timeout_salvaged=1` is still a sign that
+the optimizer and policy-cost budget were not fitted cleanly within the
+available runtime.
 
 Use the library's evaluation counter when initialization, resampling, or
 adaptive population sizes make this equation inexact. Count population size,
