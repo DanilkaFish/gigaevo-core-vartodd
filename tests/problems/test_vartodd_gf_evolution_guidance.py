@@ -81,15 +81,27 @@ def test_task_context_describes_evidence_without_prescribing_response() -> None:
 
 def test_task_context_clarifies_groups_and_schedule_setters() -> None:
     text = TASK_DESCRIPTION.read_text(encoding="utf-8")
+    prose = " ".join(text.split())
 
-    assert "Every `map_par` call must pass `group=` explicitly" in text
-    assert "must already have been declared" in text
-    assert "complete parameter layout must remain identical" in text
-    assert "constructors describe one configuration" in text
+    assert "Every `map_par` call must pass `group=` explicitly" in prose
+    assert "must already have been declared" in prose
+    assert "complete parameter layout must remain identical" in prose
+    assert "constructors describe one configuration" in prose
     assert (
         "Never mix a positional configuration with `ranks=` or `values=`"
-        in text
+        in prose
     )
     assert "ActionPool(ranks=" in text
     assert "set_action_pool(early_pool, ranks=" in text
     assert text.count("### Rank schedules") == 1
+
+
+def test_task_context_explains_runtime_budget_utilization() -> None:
+    text = TASK_DESCRIPTION.read_text(encoding="utf-8")
+    prose = " ".join(text.split())
+
+    assert "equal to `vartodd_call_timeout`" in prose
+    assert "objective calls × seeds × policy cost" in prose
+    assert "remaining time can support more distinct parameter evaluations" in prose
+    assert "Running into the soft timeout is safe" in prose
+    assert "were not fitted cleanly within the available runtime" in prose
