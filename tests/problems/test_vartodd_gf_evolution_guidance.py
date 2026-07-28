@@ -51,3 +51,29 @@ def test_mutation_prompt_requires_one_primary_causal_experiment() -> None:
     assert "one primary causal hypothesis" in text
     assert "controls held fixed" in text
     assert "optimizer-specific evidence" in text
+
+
+def test_task_context_describes_evidence_without_prescribing_response() -> None:
+    text = TASK_DESCRIPTION.read_text(encoding="utf-8")
+
+    for biased in (
+        "appropriate only around a productive basin",
+        "They are poor default scouts",
+        "use global exploration, then refine",
+        "another optimizer cannot repair",
+        "supports changing the mechanism",
+        "Do not call a second identical stage a restart",
+        "Typical rank regimes:",
+        "Cheap sources often",
+        "useful changes can target",
+    ):
+        assert biased not in text
+
+    for neutral in (
+        "do not uniquely identify their cause",
+        "program-defined labels",
+        "Passing `xopt` preserves",
+        "relative positions in the reached trajectory",
+        "do not imply fixed properties",
+    ):
+        assert neutral in text
