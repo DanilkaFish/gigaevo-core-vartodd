@@ -19,6 +19,16 @@ mutation_operator:
         branch above the degenerate near-final funnel. The goal is to explore
         new territory and deposit a reusable near-final path.
 
+        Start TODD finite. Compare actual z research with min_buckets
+        (guaranteed work), max_buckets (soft reserve-driven target), and
+        limit_bucket (hard candidate cap). Raise a binding max_buckets
+        separately from a binding limit_bucket. If a productive capped path
+        reaches the difficult terminal region, a rank schedule may use
+        limit_bucket=-1 only in that terminal band while earlier bands remain
+        finite. Control full-search cost with y budgets, retention, beamwidth,
+        seeds, and optimizer evaluations rather than imposing one universal
+        cap.
+
         Keep standalone TOHPE sampling modest by default. Prefer one-hot and
         low-weight sparse samples to large dense budgets. Raise standalone
         TOHPE sampling only when execution evidence shows that it still
@@ -48,8 +58,11 @@ mutation_operator:
         Do not increase a sample budget after its effective unique coefficient
         space is saturated.
 
-        - near_tail_paths: limit_bucket=-1 can surface actions that a capped
-          TOHPEprefix or TODD search never reaches.
+        - near_tail_paths (margin 10..30): compare actual z research with
+          min_buckets, max_buckets, and limit_bucket. If a capped terminal
+          search is still productive or stops at its hard cap, test a
+          scheduled limit_bucket=-1 terminal band. Do not simultaneously
+          inflate beamwidth, sampling, retention, seeds, and optimizer budget.
         - wide_margin_paths: use a medium-to-wide margin (30..100, scaled to
           failed reuses) and make a meaningful source or policy change instead
           of repeating a small local adjustment.

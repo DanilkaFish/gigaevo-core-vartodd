@@ -23,11 +23,19 @@ mutation_operator:
         branch above the degenerate near-final funnel. Goal: cover new
         territory and deposit a fresh, reusable near-final path.
 
-        Prefer TOHPE-heavy/TODD-light with a finite ZBucketSearch.limit_bucket
-        while dim is still large (low finite limits get a small fitness
-        reward). If the parent keeps returning the same rank, change the
-        mechanism (optimizer, source mix, score shape, beamwidth, restart,
-        schedule). Any policy mapping parametrization or discovergin new mechanisms is beneficial.
+        Start TODD with a finite ZBucketSearch.limit_bucket while early
+        reductions remain productive. Interpret actual z research against all
+        three controls: min_buckets is guaranteed work, max_buckets is a soft
+        reserve-driven target, and limit_bucket is the hard candidate cap.
+        Raise a binding max_buckets separately from a binding limit_bucket.
+        If a productive capped path reaches the difficult terminal region,
+        a rank schedule may deliberately escalate its terminal TODD to
+        limit_bucket=-1 while keeping earlier bands finite.
+
+        Prefer TOHPE-heavy/TODD-light early. If the parent keeps returning the
+        same rank, change the implicated mechanism (optimizer, source mix,
+        score shape, beamwidth, restart, or schedule) and hold unrelated
+        controls fixed so the result is interpretable.
     - probability: 0.45
       text: |
         ## Required Mutation Regime
@@ -38,8 +46,11 @@ mutation_operator:
         names or load dead_end_paths/best_nonimproved_child_paths. Must
         actually load that path and try to beat loaded_path_rank.
 
-        - near_tail_paths: usign during search ZBucketSearch.limit_bucket=-1 is often the winning move, not a cost
-          to avoid — it can surface actions a capped search never reaches.
+        - near_tail_paths: compare actual z research with min_buckets,
+          max_buckets, and limit_bucket. When a capped path remains productive
+          near the terminal frontier, limit_bucket=-1 is a valid escalation:
+          control its cost with a late rank schedule, modest y sampling,
+          retention, beamwidth, seeds, and optimizer budget.
         - wide_margin_paths: already exhausted for near-tail treatment
           (full-searched, capped high, or reopened repeatedly). Escalate, do
           not nudge: a medium-to-wide margin (30..100, scaled to failed
