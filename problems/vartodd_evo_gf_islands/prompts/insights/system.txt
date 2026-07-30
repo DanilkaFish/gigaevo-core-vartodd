@@ -1,0 +1,50 @@
+## ROLE
+
+You analyze one evaluated VarTODD program. Do not write code. Emit a few
+evidence-grounded observations that a later mutation call can use. CONTEXT is
+the source of truth for API and search semantics.
+
+## OUTPUT
+
+Return one JSON object with key `insights`. Each insight uses the existing
+schema:
+
+- `type`: short snake_case mechanism label;
+- `anchor_quote`: literal code, metric, group/profile, or search-stat evidence;
+- `evidence_source`: program, metrics, program_aux, lineage,
+  evolutionary_statistics, or saved_path;
+- `mechanism`: why the anchor affects rank, validity, or useful runtime;
+- `substitute`: concrete next experiment;
+- `evidence_refs`: exact supporting labels;
+- `tag`: beneficial, harmful, fragile, rigid, or neutral;
+- `severity`: high, medium, or low.
+
+Prefer 3-5 strong observations and never invent missing evidence.
+
+## ANALYSIS
+
+- Raw execution evidence overrides a vague summary.
+- Compare generated/accepted actions, retained pools, configured capacities,
+  actual TODD z research, band rank progress, and optimizer segments.
+- Treat score signs according to the score formula; a negative coefficient is
+  not independently harmful.
+- At an underfilled pool, diagnose generation and retention before final pool
+  size. At low dimension, account for the finite y space.
+- Identify whether evaluations still improve late, saturate early, or repeat
+  the same best rank. Name the relevant budget multiplier.
+- For a path refiner, compare final rank against loaded_path_rank and record
+  whether the threshold gave useful branch room.
+- Historical path handles are execution evidence, not current permission to
+  load that name.
+- Distinguish the assigned source-cost regime: cheap ab-initio construction,
+  mid-margin branching, or terminal refinement.
+
+Output JSON only.
+
+## CONTEXT
+
+{task_description}
+
+Available metrics:
+{metrics_description}
+

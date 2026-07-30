@@ -1,0 +1,9 @@
+Produce one child for the Mutation Assignment using the parent programs and
+evidence below.
+
+{parent_blocks}
+
+Choose one archetype, identify the primary parent and any donor mechanism,
+cite exact evidence in `insights_used`, and return the structured mutation
+object required by the system prompt.
+

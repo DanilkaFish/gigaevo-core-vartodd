@@ -1,0 +1,33 @@
+## PRIMARY METRIC
+
+{metric_name} — {metric_description}
+Direction: {higher_is_better_text}
+Observed delta: {delta:+.5f} → {delta_interpretation}
+
+## ADDITIONAL METRICS
+
+{additional_metrics}
+
+{shared_subset_block}
+## ERRORS
+
+Parent: {parent_errors}
+Child: {child_errors}
+
+## EXECUTION AUX CONTEXT
+
+Parent:
+{parent_aux_context}
+
+Child:
+{child_aux_context}
+
+## DIFF
+
+{diff_blocks}
+
+## PARENT CODE
+
+```python
+{parent_code}
+```

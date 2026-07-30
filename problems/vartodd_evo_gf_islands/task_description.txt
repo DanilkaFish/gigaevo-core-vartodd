@@ -1,0 +1,347 @@
+Mutate a Python tuner for VarTODD/FastTODD on the GF matrix selected by
+`run_gf_islands.py`. The primary objective is lower T-count rank. The active
+matrix exposes `INITIAL_RANK`; the launcher's lower fitness bound exposes
+`TARGET_FINAL_RANK`.
+
+This experiment separates three mutation regimes into independent islands.
+The selected Mutation Assignment is binding for the child. Parent roles,
+route-specific execution evidence, and any selectable path cards are already
+prepared for that assignment.
+
+## 1. What the program controls
+
+Every evaluation combines two decisions:
+
+1. A policy mapping determines which actions FastTODD generates, retains,
+   scores, and expands in each reached rank band.
+2. An optimization procedure searches the mapped parameter vector, allocates
+   evaluations, and may restart from paths found during the run.
+
+Both levels matter. A strong optimizer cannot select actions that the policy
+never generates, while a useful policy family may remain undiscovered when
+the optimizer repeatedly maps into the same plateaus.
+
+The mapped landscape is expensive, irregular, non-convex, and often
+discontinuous. Integer mappings create regions of identical effective
+policies. Rank and path decisions add further plateaus and local minima.
+Pymoo provides the installed optimizer implementations. Population,
+initialization, social/differential parameters, termination, and restart
+placement should be chosen with this landscape in mind.
+
+## 2. FastTODD policy API
+
+An action is a correctness-preserving `(z, y)` rewrite. Only candidates with
+positive rank reduction become selectable.
+
+Sampling inside a binary null space:
+
+```python
+SamplingBudget(
+    one_hot=ONE_HOT_BUDGET,
+    sparse=SPARSE_SAMPLES,
+    dense=DENSE_SAMPLES,
+    sparse_max_weight=SPARSE_MAX_WEIGHT,
+)
+```
+
+`one_hot="all"` enumerates every weight-one basis vector; an integer caps the
+count. `sparse` and `dense` add sampled vectors. A null space of dimension
+`dim` contains only `2**dim - 1` nonzero vectors, so low-dimensional terminal
+bands quickly saturate y sampling.
+
+The two action sources are:
+
+```python
+TohpeSearch(
+    sampling=SamplingBudget(...),
+    pool=SourcePool(keep=H_KEEP, reserve=H_RESERVE),
+    z_choices=H_Z_CHOICES,
+)
+
+ToddSearch(
+    sampling=SamplingBudget(...),
+    pool=SourcePool(keep=T_KEEP, reserve=T_RESERVE),
+    actions_per_bucket=ACTIONS_PER_BUCKET,
+    buckets=ZBucketSearch(
+        min_buckets=MIN_BUCKETS,
+        max_buckets=MAX_BUCKETS,
+        limit_bucket=LIMIT_BUCKET,
+    ),
+)
+```
+
+TOHPE is the cheaper source and commonly supplies early and middle bands.
+TODD researches separate z buckets and may become the only source of positive
+actions in a hard lower band. TODD cost dominates when z research is broad.
+
+For `ZBucketSearch`, `min_buckets` is guaranteed research, `max_buckets` is a
+reserve-driven soft target (`0` means no soft target), and `limit_bucket` is
+the hard z-candidate cap (`-1` means the full space). The evaluator reports
+`buckets_space = rank**2 + rank`; caps larger than this have the same effective
+ceiling. Raising `max_buckets` researches more distinct z buckets and can
+increase both action-discovery probability and the diversity of actions
+available to scoring. `limit_bucket` must be high enough not to truncate the
+intended research.
+
+Retention and merging:
+
+```python
+SourcePool(keep=SOURCE_KEEP, reserve=SOURCE_RESERVE)
+ActionPool(final_size=FINAL_POOL_SIZE)
+```
+
+`keep=0` disables that source. `reserve <= keep` is the minimum source
+contribution protected during merging. Reserve also affects how far TODD must
+continue searching. `final_size` caps the merged pool; raising it cannot help
+an already underfilled pool.
+
+Scores:
+
+```python
+PolicyScores(
+    exploration=ExplorationScore(
+        weights=[W_RED, W_DIM, W_BUCKET, W_YW, W_ZW],
+        centers=[C_RED, C_DIM, C_BUCKET, C_YW, C_ZW],
+        pow=POOL_POWER,
+    ),
+    final=FinalizationScore(
+        weights=[W_RED, W_DIM, W_BUCKET, W_YW, W_ZW, W_TOHPE],
+        centers=[C_RED, C_DIM, C_BUCKET, C_YW, C_ZW, C_TOHPE],
+        pow=FINAL_POWER,
+    ),
+)
+```
+
+ExplorationScore determines which generated candidates survive source
+pooling. FinalizationScore orders the merged candidates and beam choices.
+Scores are usually the most influential mapped policy parameters when the
+pool contains alternatives, but they cannot recover an action that was never
+generated.
+
+Features are normalized to `[0, 1]`: reduction `red`, basis dimension `dim`,
+bucket potential `bucket`, y/z Hamming weights `yw`/`zw`, and final-only TOHPE
+lookahead `tohpe`. Higher score is better:
+
+```text
+sum_i weights[i] * abs(feature[i] - centers[i]) ** pow
+```
+
+At center zero, a positive weight rewards a larger feature and a negative
+weight penalizes it. At a nonzero center, a positive weight rewards distance
+from the center while a negative weight rewards closeness. A negative
+converged weight is therefore not an error by itself.
+
+Selection:
+
+```python
+ActionSelection(
+    beamwidth=BEAMWIDTH,
+    mode="best",             # or "softmax"
+    temperature=TEMPERATURE,
+)
+```
+
+Beamwidth controls both actions expanded per node and states retained per
+depth. Wider beams multiply runtime but explore more trajectories. Near a
+tail where mapped optimization repeatedly returns the same path, plateau-
+resilient optimizer settings or a very wide beam that directly researches
+many trajectories are distinct ways to reduce dependence on a flat mapping.
+
+Apply values with `set_scores`, `set_action_selection`, `set_action_pool`,
+`set_tohpe_search`, and `set_todd_search`. Each accepts a constant or a rank
+schedule:
+
+```python
+self.set_scores(PolicyScores(...))
+self.set_todd_search(
+    ranks=[EARLY_THRESHOLD, TAIL_THRESHOLD],
+    values=[light_todd, heavy_todd],
+)
+```
+
+Ranks and values have equal length. The first value is the fallback; later
+values take over after rank crosses below their threshold. A threshold
+outside the actually reached region is inactive.
+
+## 3. Evaluator and mapped parameters
+
+A valid program defines one `Evaluator(BaseEvaluator)`, a scalar
+`__call__(params)`, and `entrypoint()` returning exactly one final
+`evaluator.get_best()`.
+
+The helper import surface is:
+
+```python
+from helper import (
+    INITIAL_RANK,
+    TARGET_FINAL_RANK,
+    BaseEvaluator,
+    ExplorationScore,
+    FinalizationScore,
+    PolicyScores,
+    ActionSelection,
+    ActionPool,
+    SamplingBudget,
+    SourcePool,
+    TohpeSearch,
+    ToddSearch,
+    ZBucketSearch,
+)
+```
+
+`policy_mapping()` declares mapped optimizer parameters and calls the policy
+setters. `map_par(mapping, group="<semantic-name>")` allocates a stable slot
+in the full `x0` vector and returns `mapping(current_value)`. Every call uses
+an explicit `group=`, including `group="default"` when intentional. Group
+names, call count, and declaration order remain independent of mapped values
+and policy branches.
+
+All groups begin active. `select_parameter_groups(*names)` exposes a compact
+vector containing only those groups; all other groups remain frozen at their
+current x0 values. `select_all_parameter_groups()` restores every group.
+Available inspection methods are `parameter_group_names()`,
+`parameter_group_size(name)`, `parameter_group_sizes()`,
+`active_parameter_group_names()`, `extract_parameter_group(name)`, and
+`extract_active()`.
+
+Always construct optimizer dimensions from:
+
+```python
+n = len(evaluator.extract_active())
+```
+
+Changing selected groups changes vector dimension and coordinate meaning.
+Rebuild the optimizer state and query `extract_active()` again after group
+selection, `reinit()`, or a restart.
+
+`run(params, seeds)` evaluates one vector over the listed seeds and returns
+per-seed ranks. Useful properties include `best_rank`, `path_num`,
+`target_final_rank`, and `buckets_space`.
+
+`set_up_new_init(path_num, rank_thr, xopt=None)` branches one in-memory best
+path and returns the new active vector, or `None` when unavailable:
+
+```python
+params = evaluator.set_up_new_init(
+    0,
+    rank_thr=evaluator.best_rank + margin,
+    xopt=xopt,
+)
+if params is not None:
+    optimize(evaluator, params)
+```
+
+`path_num` is an in-run best-path index, not a saved path name.
+
+## 4. Start modes and assigned regimes
+
+Fresh search uses:
+
+```python
+Evaluator(path_name="init", max_depth=MAX_DEPTH)
+```
+
+It starts at matrix-derived `INITIAL_RANK`.
+
+Saved-path search uses an exact name from the current Selectable Shared Paths
+block:
+
+```python
+Evaluator(path_name=SELECTED_NAME, margin=MARGIN, max_depth=MAX_DEPTH)
+```
+
+The report distinguishes `loaded_path_rank` (the artifact rank that the child
+must beat), `loaded_rank` (where branching actually starts),
+`init_rank_thr` (the branch threshold), and `loaded_path_improved`.
+
+The three destination regimes are:
+
+- `ab_initio`: build a fresh path, normally with heavy TOHPE and light or
+  disabled early TODD. ab_initio receives no path inventory.
+- `mid_margin`: load a current selectable path and branch with enough earlier
+  context to search an alternative descent rather than only replay its tail.
+- `near_end`: load a current selectable path and focus on the hard inherited
+  tail. Low margins shorten the path but can create large plateaus because
+  many mapped policies replay the same retained suffix.
+
+The two refinement regimes receive the same selectable inventory. Their
+difference is the branch/restart contract, not separate path pools.
+
+## 5. Selectable Shared Paths evidence
+
+Only exact names under `## Selectable Shared Paths` are current loadable
+handles. A historical handle in parent code, comments, lineage, or parent aux
+describes the previous run but does not establish current availability.
+
+Each complete card contains:
+
+```text
+### <exact path name>
+selection:
+  rank=... depth=... u/i=... kind=... band=...
+path_summary:
+  ...
+policy_bands:
+  ...
+policy_profiles:
+  ...
+producer_search:
+  runtime=... total_evals=... best_seen_times=...
+  last_improvement=... timeout_salvaged=...
+```
+
+`selection` identifies and ranks the candidate. `u/i` is uses/improvements.
+`path_summary` gives the descent. `policy_bands` and `policy_profiles` show
+the band-specific policy that produced it. `producer_search` explains how
+the artifact was obtained; it is evidence about search productivity, not
+another selection authority.
+
+The inventory keeps one representative per final rank, favoring a higher
+initial rank and then lower reuse on ties. Non-improving children and stale
+superseded paths are not selectable.
+
+Path names encode saved final/start ranks and
+`z<max_todd_observed>of<max_todd_limit>`. The numerator is actual source-
+specific TODD z research; the denominator is configured capacity. They are
+not interchangeable.
+
+## 6. Reading execution evidence
+
+Use `path_policy_groups`, `converged_policy_profiles`, and `search_stat`
+together. Raw execution evidence overrides Program Insights when they
+disagree.
+
+Groups report reached rank bands, reduction, profile, dimension, accepted
+TOHPE/TODD actions (`src=H/T`), retained pools, and actual z research.
+Profiles report configured pool capacities, sampling, z limits, beamwidth,
+and score weights/centers.
+
+Always compare configured capacity with actual behavior:
+
+- A full actual pool can make retention or final pool size binding.
+- An underfilled pool is a generation/retention problem.
+- High z research with few accepted actions means rare positive actions.
+  Broader `max_buckets` searches more distinct buckets; a higher
+  `limit_bucket` matters when the hard cap truncates it.
+- At terminal `dim` 1..3, y sampling may already enumerate nearly everything;
+  larger y budgets then add little.
+- Several distinct retained actions can justify a larger beam. A wide beam
+  cannot help a pool containing only one useful action.
+
+`search_stat` reports rank quantiles, each init/restart segment, improvement
+checkpoints, `last_improvement`, `total_evals`, and `best_seen_times`.
+Segments that improve only at the beginning are plateaued; late improvements
+show productive budget. Flat quantiles indicate many parameter vectors map to
+the same behavior. Repeated sightings of one best rank indicate saturation.
+
+Program runtime should make productive use of the configured per-program
+budget after validity and rank quality. Allocate evaluations, seeds,
+restarts, parameter groups, path depth, and beam/source cost according to
+observed segment yield. `timeout_salvaged=1` safely preserves the best result
+when execution passes the soft deadline; it has no direct reward or penalty,
+but repeated salvage indicates imperfect budget fitting.
+
+For a refinement child, beating `loaded_path_rank` is the direct evidence of
+progress. When a previous child failed from one path/threshold, the next
+experiment should materially change the threshold or another causal
+mechanism rather than replay the same near-tail plateau.
