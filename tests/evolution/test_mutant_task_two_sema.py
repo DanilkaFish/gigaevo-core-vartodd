@@ -19,6 +19,7 @@ import pytest
 from gigaevo.evolution.engine.mutant_task import run_one_mutant
 from gigaevo.evolution.engine.refresh import ParentRefreshTicket
 from gigaevo.evolution.mutation.parent_selector import RandomParentSelector
+from gigaevo.evolution.strategies.base import MutationRoute, MutationSelection
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
 
@@ -30,7 +31,13 @@ def _make_parent() -> Program:
 class _FakeEngine:
     """Minimal engine surface used by run_one_mutant under the two-sema model."""
 
-    def __init__(self, parent: Program, *, max_in_flight: int = 3) -> None:
+    def __init__(
+        self,
+        parent: Program,
+        *,
+        max_in_flight: int = 3,
+        strict_in_flight: bool = False,
+    ) -> None:
         self.storage = AsyncMock()
         self.state = AsyncMock()
         self.mutation_operator = AsyncMock()
@@ -54,6 +61,7 @@ class _FakeEngine:
         cfg.parent_selector = RandomParentSelector(num_parents=1)
         cfg.coalesce_refresh = False
         cfg.max_in_flight = max_in_flight
+        cfg.strict_in_flight = strict_in_flight
         self.config = cfg
         self._ss_config = cfg
 
@@ -67,7 +75,7 @@ class _FakeEngine:
         self._parent = parent
 
     async def _select_parents_for_mutation(self):
-        return [self._parent]
+        return MutationSelection(parents=[self._parent])
 
     async def _write_snapshot(self, **_kwargs) -> None:
         return None
@@ -100,6 +108,40 @@ async def test_success_path_transfers_buffer_and_ticket(monkeypatch) -> None:
     # in-flight & ticket: transferred
     assert "new-id-1" in engine._in_flight
     assert "new-id-1" in engine._inflight_tickets
+
+
+@pytest.mark.asyncio
+async def test_selected_route_is_forwarded_to_mutation(monkeypatch) -> None:
+    engine = _FakeEngine(_make_parent(), max_in_flight=1)
+    route = MutationRoute(
+        regime_id="near_end",
+        island_id="near_end",
+        guidance="Refine the near tail.",
+    )
+
+    async def select():
+        return MutationSelection(
+            parents=[engine._parent],
+            route=route,
+            parent_roles=("bootstrap_donor",),
+        )
+
+    engine._select_parents_for_mutation = select
+    await _hold_producer_slot(engine)
+    captured = {}
+
+    async def fake_gen(**kwargs):
+        captured.update(kwargs)
+        return "new-id-route"
+
+    monkeypatch.setattr(
+        "gigaevo.evolution.engine.mutant_task.generate_one_mutation", fake_gen
+    )
+
+    assert await run_one_mutant(engine, task_id=0) == "new-id-route"
+    assert captured["parents"] == [engine._parent]
+    assert captured["route"] == route
+    assert captured["parent_roles"] == ("bootstrap_donor",)
 
 
 @pytest.mark.asyncio
@@ -146,6 +188,150 @@ async def test_llm_returns_none_releases_producer_no_buffer(monkeypatch) -> None
     assert engine._producer_sema._value == 2
     assert engine._buffer_sema._value == 2  # untouched
     assert not engine._in_flight
+
+
+def test_strict_mode_waits_for_capacity_before_selecting_parents(
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        engine = _FakeEngine(
+            _make_parent(),
+            max_in_flight=1,
+            strict_in_flight=True,
+        )
+        await engine._buffer_sema.acquire()
+        await _hold_producer_slot(engine)
+        selected = asyncio.Event()
+
+        async def select_parents():
+            selected.set()
+            return MutationSelection(parents=[engine._parent])
+
+        engine._select_parents_for_mutation = select_parents
+
+        async def fake_gen(**_k):
+            return "strict-id-1"
+
+        monkeypatch.setattr(
+            "gigaevo.evolution.engine.mutant_task.generate_one_mutation", fake_gen
+        )
+
+        task = asyncio.create_task(run_one_mutant(engine, task_id=0))
+        await asyncio.sleep(0.05)
+
+        assert not selected.is_set()
+        assert not engine._in_flight
+
+        engine._buffer_sema.release()
+        assert await task == "strict-id-1"
+        assert selected.is_set()
+        assert engine._buffer_sema._value == 0
+        assert engine._in_flight == {"strict-id-1"}
+
+    asyncio.run(scenario())
+
+
+def test_strict_mode_releases_early_capacity_when_no_mutant(
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        engine = _FakeEngine(
+            _make_parent(),
+            max_in_flight=1,
+            strict_in_flight=True,
+        )
+        await _hold_producer_slot(engine)
+        slot_values_during_generation: list[int] = []
+
+        async def fake_gen(**_k):
+            slot_values_during_generation.append(engine._buffer_sema._value)
+            return None
+
+        monkeypatch.setattr(
+            "gigaevo.evolution.engine.mutant_task.generate_one_mutation", fake_gen
+        )
+
+        assert await run_one_mutant(engine, task_id=0) is None
+        assert slot_values_during_generation == [0]
+        assert engine._buffer_sema._value == 1
+        assert not engine._in_flight
+
+    asyncio.run(scenario())
+
+
+def test_strict_mode_cancellation_releases_pre_generation_capacity() -> None:
+    async def scenario() -> None:
+        engine = _FakeEngine(
+            _make_parent(),
+            max_in_flight=1,
+            strict_in_flight=True,
+        )
+        await _hold_producer_slot(engine)
+        selection_started = asyncio.Event()
+        never_finish = asyncio.Event()
+
+        async def select_parents():
+            selection_started.set()
+            await never_finish.wait()
+            return MutationSelection(parents=[engine._parent])
+
+        engine._select_parents_for_mutation = select_parents
+        task = asyncio.create_task(run_one_mutant(engine, task_id=0))
+        await asyncio.wait_for(selection_started.wait(), timeout=1.0)
+
+        assert engine._buffer_sema._value == 0
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert engine._producer_sema._value == 1
+        assert engine._buffer_sema._value == 1
+        assert not engine._in_flight
+
+    asyncio.run(scenario())
+
+
+def test_strict_mode_one_released_slot_admits_one_producer(monkeypatch) -> None:
+    async def scenario() -> None:
+        engine = _FakeEngine(
+            _make_parent(),
+            max_in_flight=2,
+            strict_in_flight=True,
+        )
+        await engine._buffer_sema.acquire()
+        await engine._buffer_sema.acquire()
+        await _hold_producer_slot(engine)
+        await _hold_producer_slot(engine)
+        generated: list[int] = []
+
+        async def fake_gen(*, task_id, **_k):
+            generated.append(task_id)
+            return f"strict-id-{task_id}"
+
+        monkeypatch.setattr(
+            "gigaevo.evolution.engine.mutant_task.generate_one_mutation", fake_gen
+        )
+        tasks = [
+            asyncio.create_task(run_one_mutant(engine, task_id=task_id))
+            for task_id in range(2)
+        ]
+        await asyncio.sleep(0.05)
+        assert generated == []
+
+        engine._buffer_sema.release()
+        await asyncio.sleep(0.05)
+
+        assert len(generated) == 1
+        assert len(engine._in_flight) == 1
+        assert sum(task.done() for task in tasks) == 1
+
+        pending = next(task for task in tasks if not task.done())
+        pending.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await pending
+        await next(task for task in tasks if task.done() and task is not pending)
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.asyncio

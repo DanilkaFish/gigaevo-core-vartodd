@@ -11,6 +11,7 @@ from gigaevo.evolution.mutation.constants import (
     MUTATION_CONTEXT_METADATA_KEY,
     MUTATION_MEMORY_METADATA_KEY,
 )
+from gigaevo.evolution.strategies.base import MutationRoute
 from gigaevo.llm.agents.mutation import (
     MutationAgent,
     MutationPromptFields,
@@ -29,6 +30,9 @@ def _make_agent(
     mutation_mode: str = "rewrite",
     system_prompt: str = "You are a mutation agent.",
     user_prompt_template: str = "Mutate {count} parent programs:\n{parent_blocks}",
+    mutation_regime_guidance: list[object] | None = None,
+    mutation_regime_probability: float = 1.0,
+    route_context_provider: MagicMock | None = None,
 ) -> MutationAgent:
     """Create a MutationAgent with a fully mocked LLM."""
     mock_llm = MagicMock()
@@ -38,6 +42,9 @@ def _make_agent(
         system_prompt=system_prompt,
         user_prompt_template=user_prompt_template,
         mutation_mode=mutation_mode,
+        mutation_regime_guidance=mutation_regime_guidance,
+        mutation_regime_probability=mutation_regime_probability,
+        route_context_provider=route_context_provider,
     )
 
 
@@ -234,6 +241,99 @@ class TestBuildPrompt:
         user_content = result["messages"][1].content
         assert user_content.startswith("Process 1 programs.")
         assert user_content.endswith("Done.")
+
+    def test_explicit_regime_guidance_skips_internal_sampling(self, monkeypatch):
+        agent = _make_agent(
+            mutation_regime_guidance=[
+                {"text": "Legacy sampled guidance.", "probability": 1.0}
+            ]
+        )
+        monkeypatch.setattr(
+            agent,
+            "_sample_mutation_regime",
+            lambda: (_ for _ in ()).throw(AssertionError("must not sample")),
+        )
+        state = _make_state(
+            explicit_regime_guidance=(
+                "## Near-end route\nUse the selected near-tail island."
+            )
+        )
+
+        result = agent.build_prompt(state)
+
+        assert "## Near-end route" in result["user_prompt"]
+        assert "Legacy sampled guidance." not in result["user_prompt"]
+        assert (
+            result["selected_mutation_regime"]
+            == "## Near-end route\nUse the selected near-tail island."
+        )
+
+    def test_missing_explicit_guidance_retains_internal_sampling(self, monkeypatch):
+        agent = _make_agent()
+        monkeypatch.setattr(
+            agent,
+            "_sample_mutation_regime",
+            lambda: "Legacy sampled guidance.",
+        )
+        state = _make_state()
+
+        result = agent.build_prompt(state)
+
+        assert "Legacy sampled guidance." in result["user_prompt"]
+        assert result["selected_mutation_regime"] == "Legacy sampled guidance."
+
+    def test_route_provider_orders_and_labels_prompt_context(self):
+        provider = MagicMock()
+        provider.build_assignment.return_value = "## Mutation Assignment\nnear_end"
+        provider.filter_parent_context.side_effect = (
+            lambda route, parent, role, context: f"filtered:{role}:{context}"
+        )
+        provider.build_external_context.return_value = (
+            "## Selectable Shared Paths\npath cards"
+        )
+        agent = _make_agent(route_context_provider=provider)
+        parents = [
+            _make_program(metadata={MUTATION_CONTEXT_METADATA_KEY: "first"}),
+            _make_program(metadata={MUTATION_CONTEXT_METADATA_KEY: "second"}),
+        ]
+        route = MutationRoute(
+            regime_id="near_end",
+            island_id="near_end",
+            guidance="## Required Island Regime\nrefine the tail",
+            context_profile="near_end",
+        )
+        roles = ("target_island", "bootstrap_donor")
+        state = _make_state(
+            parents=parents,
+            explicit_route=route,
+            parent_roles=roles,
+            explicit_regime_guidance=route.guidance,
+        )
+
+        result = agent.build_prompt(state)
+        prompt = result["user_prompt"]
+
+        assignment_at = prompt.index("## Mutation Assignment")
+        parent_at = prompt.index("=== Parent 1 [role=target_island] ===")
+        external_at = prompt.index("## Selectable Shared Paths")
+        guidance_at = prompt.index("## Required Island Regime")
+        assert assignment_at < parent_at < external_at < guidance_at
+        assert "=== Parent 2 [role=bootstrap_donor] ===" in prompt
+        assert "filtered:target_island:first" in prompt
+        assert "filtered:bootstrap_donor:second" in prompt
+        assert [
+            call.args[2] for call in provider.filter_parent_context.call_args_list
+        ] == list(roles)
+
+    def test_route_provider_is_not_called_for_legacy_prompt(self):
+        provider = MagicMock()
+        agent = _make_agent(route_context_provider=provider)
+
+        agent.build_prompt(_make_state())
+
+        provider.build_assignment.assert_not_called()
+        provider.filter_parent_context.assert_not_called()
+        provider.build_external_context.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -486,6 +586,24 @@ class TestArun:
         assert call_args["final_code"] == ""
 
     @pytest.mark.asyncio
+    async def test_arun_forwards_explicit_regime_guidance_to_state(self):
+        agent = _make_agent()
+        agent.graph = AsyncMock()
+        agent.graph.ainvoke = AsyncMock(return_value={"parsed_output": {}})
+
+        await agent.arun(
+            input=[_make_program()],
+            mutation_mode="rewrite",
+            explicit_regime_guidance="Use the ab-initio route.",
+        )
+
+        initial_state = agent.graph.ainvoke.call_args.args[0]
+        assert (
+            initial_state["explicit_regime_guidance"]
+            == "Use the ab-initio route."
+        )
+
+    @pytest.mark.asyncio
     async def test_arun_returns_empty_dict_when_no_parsed_output(self):
         """When graph returns state without parsed_output, arun returns {}."""
         agent = _make_agent()
@@ -494,7 +612,7 @@ class TestArun:
 
         parent = _make_program(metadata={MUTATION_CONTEXT_METADATA_KEY: "ctx"})
         result = await agent.arun(input=[parent], mutation_mode="rewrite")
-        assert result == {"prompt_id": None}
+        assert result == {"prompt_id": None, "mutation_regime": None}
 
 
 # ---------------------------------------------------------------------------

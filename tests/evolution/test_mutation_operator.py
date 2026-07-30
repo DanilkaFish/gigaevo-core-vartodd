@@ -8,6 +8,7 @@ import pytest
 
 from gigaevo.evolution.mutation.base import MutationSpec
 from gigaevo.evolution.mutation.mutation_operator import LLMMutationOperator
+from gigaevo.evolution.strategies.base import MutationRoute
 from gigaevo.exceptions import MutationError
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
@@ -170,6 +171,48 @@ class TestMutateSingle:
         assert MUTATION_OUTPUT_METADATA_KEY in result.metadata
         assert (
             result.metadata[MUTATION_OUTPUT_METADATA_KEY]["archetype"] == "local_search"
+        )
+
+    async def test_mutate_with_route_forwards_explicit_guidance(self):
+        agent = AsyncMock()
+        agent.arun.return_value = {"code": "def f(): return 5"}
+        op = _make_operator(agent)
+        parent = _prog()
+        route = MutationRoute(
+            regime_id="near_end",
+            island_id="near_end",
+            guidance="Use the near-tail refinement regime.",
+        )
+
+        result = await op.mutate_with_route(
+            [parent],
+            route,
+            ("target_island",),
+        )
+
+        assert isinstance(result, MutationSpec)
+        agent.arun.assert_awaited_once_with(
+            input=[parent],
+            mutation_mode="rewrite",
+            explicit_regime_guidance=route.guidance,
+            explicit_route=route,
+            parent_roles=("target_island",),
+        )
+
+    async def test_mutate_single_uses_no_explicit_guidance(self):
+        agent = AsyncMock()
+        agent.arun.return_value = {"code": "def f(): return 6"}
+        op = _make_operator(agent)
+        parent = _prog()
+
+        await op.mutate_single([parent])
+
+        agent.arun.assert_awaited_once_with(
+            input=[parent],
+            mutation_mode="rewrite",
+            explicit_regime_guidance=None,
+            explicit_route=None,
+            parent_roles=(),
         )
 
 

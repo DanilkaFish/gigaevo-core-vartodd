@@ -32,6 +32,10 @@ from gigaevo.llm.token_tracking import llm_stage_context
 from gigaevo.monitoring.emit import emit as _emit_event
 from gigaevo.monitoring.events import LLMCall
 from gigaevo.programs.program import Program
+from gigaevo.evolution.strategies.base import MutationRoute, ParentRole
+from gigaevo.evolution.strategies.route_context import (
+    MutationRouteContextProvider,
+)
 
 if TYPE_CHECKING:
     from gigaevo.programs.metrics.context import MetricsContext
@@ -121,6 +125,9 @@ class MutationState(TypedDict):
     user_prompt: NotRequired[str]
     # Prompt tracking ID (None for fixed prompts, sha256[:16] for co-evolved prompts)
     prompt_id: NotRequired[str | None]
+    explicit_regime_guidance: NotRequired[str | None]
+    explicit_route: NotRequired[MutationRoute | None]
+    parent_roles: NotRequired[tuple[ParentRole, ...]]
     selected_mutation_regime: NotRequired[str | None]
     # Fields set during response parsing (optional initially)
     parsed_output: NotRequired[dict[str, Any]]
@@ -161,6 +168,7 @@ class MutationAgent(LangGraphAgent):
         live_path_store_top_k: int = 6,
         mutation_regime_guidance: list[Any] | None = None,
         mutation_regime_probability: float = 1.0,
+        route_context_provider: MutationRouteContextProvider | None = None,
     ):
         """Initialize mutation agent.
 
@@ -178,8 +186,9 @@ class MutationAgent(LangGraphAgent):
             metrics_context: Metrics context for prompt template formatting
                 (required when prompt_fetcher.is_dynamic is True)
             live_path_store_root_dir: Optional root directory for Vartodd saved
-                paths. When set with a problem dir containing path_store.py, a
-                fresh summary is appended to each mutation prompt.
+                paths. When omitted, the problem's ``path_store.DATA_PATH``
+                default is used. With a problem dir containing path_store.py,
+                a fresh summary is appended to each mutation prompt.
             live_path_store_problem_dir: Optional problem directory containing
                 path_store.py.
             live_path_store_top_k: Number of saved paths to show in the prompt.
@@ -210,6 +219,7 @@ class MutationAgent(LangGraphAgent):
         self.mutation_regime_probability = min(
             1.0, max(0.0, float(mutation_regime_probability))
         )
+        self.route_context_provider = route_context_provider
 
         # Dynamic prompt fetching support
         self._prompt_fetcher = prompt_fetcher
@@ -253,7 +263,14 @@ class MutationAgent(LangGraphAgent):
         except Exception as exc:
             logger.debug(f"[MutationAgent] prompt dump failed: {exc}")
 
-    async def arun(self, input: list[Program], mutation_mode: str) -> dict:
+    async def arun(
+        self,
+        input: list[Program],
+        mutation_mode: str,
+        explicit_regime_guidance: str | None = None,
+        explicit_route: MutationRoute | None = None,
+        parent_roles: tuple[ParentRole, ...] = (),
+    ) -> dict:
         """Execute mutation agent.
 
         Args:
@@ -270,6 +287,9 @@ class MutationAgent(LangGraphAgent):
             "llm_response": None,
             "final_code": "",
             "mutation_label": "",
+            "explicit_regime_guidance": explicit_regime_guidance,
+            "explicit_route": explicit_route,
+            "parent_roles": parent_roles,
         }
 
         final_state = await self.graph.ainvoke(initial_state)
@@ -424,7 +444,26 @@ class MutationAgent(LangGraphAgent):
         self, parents: list[Program], state: MutationState | None = None
     ) -> str:
         """Build the mutation user prompt for a set of parents."""
-        parent_blocks = self._build_parent_blocks(parents)
+        explicit_route = (
+            state.get("explicit_route") if state is not None else None
+        )
+        parent_roles = (
+            state.get("parent_roles", ()) if state is not None else ()
+        )
+        if parent_roles and len(parent_roles) != len(parents):
+            raise ValueError("parent_roles must align one-to-one with parents")
+        if (
+            explicit_route is not None
+            and self.route_context_provider is not None
+            and not parent_roles
+        ):
+            parent_roles = tuple("target_island" for _ in parents)
+
+        parent_blocks = self._build_parent_blocks(
+            parents,
+            route=explicit_route,
+            parent_roles=parent_roles,
+        )
         memory_block = self._build_memory_block(parents)
         if memory_block:
             parent_blocks = f"{parent_blocks}\n\n{memory_block}"
@@ -432,10 +471,37 @@ class MutationAgent(LangGraphAgent):
             count=len(parents), parent_blocks=parent_blocks
         )
         user_prompt = self.user_prompt_template.format(**prompt_fields.model_dump())
+
+        if explicit_route is not None and self.route_context_provider is not None:
+            assignment = self.route_context_provider.build_assignment(
+                explicit_route,
+                parents,
+                parent_roles,
+            )
+            external = self.route_context_provider.build_external_context(
+                explicit_route
+            )
+            guidance = explicit_route.guidance.strip()
+            if state is not None:
+                state["selected_mutation_regime"] = explicit_route.regime_id
+            return "\n\n".join(
+                part
+                for part in (
+                    assignment.strip(),
+                    user_prompt,
+                    external.strip(),
+                    guidance,
+                )
+                if part.strip()
+            )
+
         live_path_store = self._build_live_path_store_block()
         if live_path_store:
             user_prompt = f"{user_prompt}\n\n{live_path_store}"
-        regime = self._sample_mutation_regime()
+        explicit = (
+            state.get("explicit_regime_guidance") if state is not None else None
+        )
+        regime = explicit if explicit is not None else self._sample_mutation_regime()
         if regime:
             if state is not None:
                 state["selected_mutation_regime"] = regime
@@ -486,15 +552,38 @@ class MutationAgent(LangGraphAgent):
     def _format_mutation_regime(regime: str) -> str:
         return regime.strip()
 
-    def _build_parent_blocks(self, parents: list[Program]) -> str:
+    def _build_parent_blocks(
+        self,
+        parents: list[Program],
+        *,
+        route: MutationRoute | None = None,
+        parent_roles: tuple[ParentRole, ...] = (),
+    ) -> str:
         """Build formatted parent blocks for the mutation prompt."""
         blocks: list[str] = []
         for i, p in enumerate(parents):
-            formatted_context = self._strip_aux_sections(
-                str(p.metadata.get(MUTATION_CONTEXT_METADATA_KEY) or "")
+            raw_context = str(
+                p.metadata.get(MUTATION_CONTEXT_METADATA_KEY) or ""
             )
+            role = parent_roles[i] if parent_roles else None
+            if (
+                route is not None
+                and role is not None
+                and self.route_context_provider is not None
+            ):
+                formatted_context = (
+                    self.route_context_provider.filter_parent_context(
+                        route,
+                        p,
+                        role,
+                        raw_context,
+                    )
+                )
+            else:
+                formatted_context = self._strip_aux_sections(raw_context)
 
-            block = f"""=== Parent {i + 1} ===
+            role_suffix = f" [role={role}]" if role is not None else ""
+            block = f"""=== Parent {i + 1}{role_suffix} ===
 ```python
 {p.code}
 ```
@@ -516,10 +605,7 @@ class MutationAgent(LangGraphAgent):
 
     def _build_live_path_store_block(self) -> str:
         """Load a fresh saved-path summary for the current mutation prompt."""
-        if (
-            self.live_path_store_root_dir is None
-            or self.live_path_store_problem_dir is None
-        ):
+        if self.live_path_store_problem_dir is None:
             return ""
 
         problem_dir = self.live_path_store_problem_dir.resolve()
@@ -540,7 +626,13 @@ class MutationAgent(LangGraphAgent):
             module = importlib.util.module_from_spec(spec)
             sys.modules[module_name] = module
             spec.loader.exec_module(module)
-            path_store = module.PathStore(root_dir=str(self.live_path_store_root_dir))
+            # A problem owns its default store location through DATA_PATH.  An
+            # explicit config root remains an override for legacy experiments.
+            path_store = (
+                module.PathStore(root_dir=str(self.live_path_store_root_dir))
+                if self.live_path_store_root_dir is not None
+                else module.PathStore()
+            )
             summary = path_store.summarize(top_k=self.live_path_store_top_k)
         except Exception as exc:
             logger.warning("[MutationAgent] live path store unavailable: {}", exc)

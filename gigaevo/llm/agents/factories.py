@@ -32,6 +32,9 @@ from gigaevo.prompts import (
 )
 
 if TYPE_CHECKING:
+    from gigaevo.evolution.strategies.route_context import (
+        MutationRouteContextProvider,
+    )
     from gigaevo.llm.agents.memory_selector import MemorySelectorAgent
     from gigaevo.prompts.fetcher import PromptFetcher
 
@@ -48,6 +51,7 @@ def create_mutation_agent(
     live_path_store_top_k: int = 6,
     mutation_regime_guidance: list[object] | None = None,
     mutation_regime_probability: float = 1.0,
+    route_context_provider: MutationRouteContextProvider | None = None,
 ) -> MutationAgent:
     """Create a fully configured mutation agent.
 
@@ -130,6 +134,7 @@ def create_mutation_agent(
         live_path_store_top_k=live_path_store_top_k,
         mutation_regime_guidance=mutation_regime_guidance,
         mutation_regime_probability=mutation_regime_probability,
+        route_context_provider=route_context_provider,
     )
 
 

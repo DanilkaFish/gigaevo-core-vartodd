@@ -19,9 +19,15 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock
 
-from gigaevo.evolution.engine.mutation import generate_mutations
+from gigaevo.evolution.engine.mutation import generate_mutations, generate_one_mutation
 from gigaevo.evolution.mutation.base import MutationSpec
+from gigaevo.evolution.mutation.constants import (
+    MUTATION_PARENT_ROLES_METADATA_KEY,
+    MUTATION_REGIME_METADATA_KEY,
+    TARGET_ISLAND_METADATA_KEY,
+)
 from gigaevo.evolution.mutation.parent_selector import RandomParentSelector
+from gigaevo.evolution.strategies.base import MutationRoute
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
 
@@ -55,6 +61,62 @@ def _make_deps(mutation_spec=None, storage_get_returns_none: bool = False):
         )
 
     return mutator, storage, state_manager
+
+
+async def test_generate_one_mutation_stamps_route_metadata() -> None:
+    parent = _prog()
+    route = MutationRoute(
+        regime_id="mid_margin",
+        island_id="mid_margin",
+        guidance="Reopen before the tail.",
+    )
+    mutator, storage, state_manager = _make_deps()
+    mutator.mutate_with_route.return_value = MutationSpec(
+        code="def solve(): return 2",
+        parents=[parent],
+        name="routed",
+    )
+
+    child_id = await generate_one_mutation(
+        parents=[parent],
+        route=route,
+        parent_roles=("bootstrap_donor",),
+        mutator=mutator,
+        storage=storage,
+        state_manager=state_manager,
+        iteration=4,
+        task_id=0,
+    )
+
+    child = storage.add.await_args.args[0]
+    assert child_id == child.id
+    assert child.metadata[MUTATION_REGIME_METADATA_KEY] == "mid_margin"
+    assert child.metadata[TARGET_ISLAND_METADATA_KEY] == "mid_margin"
+    assert child.metadata[MUTATION_PARENT_ROLES_METADATA_KEY] == [
+        "bootstrap_donor"
+    ]
+    mutator.mutate_with_route.assert_awaited_once_with(
+        [parent],
+        route,
+        ("bootstrap_donor",),
+    )
+
+
+async def test_generate_one_mutation_without_route_leaves_route_metadata_absent() -> None:
+    parent = _prog()
+    mutator, storage, state_manager = _make_deps()
+
+    await generate_one_mutation(
+        parents=[parent],
+        mutator=mutator,
+        storage=storage,
+        state_manager=state_manager,
+        iteration=0,
+    )
+
+    child = storage.add.await_args.args[0]
+    assert MUTATION_REGIME_METADATA_KEY not in child.metadata
+    assert TARGET_ISLAND_METADATA_KEY not in child.metadata
 
 
 # ---------------------------------------------------------------------------

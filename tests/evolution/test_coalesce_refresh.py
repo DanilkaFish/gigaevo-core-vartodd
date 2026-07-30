@@ -31,6 +31,7 @@ from gigaevo.evolution.engine.config import SteadyStateEngineConfig
 from gigaevo.evolution.engine.ingestor import poll_and_ingest
 from gigaevo.evolution.engine.mutant_task import run_one_mutant
 from gigaevo.evolution.engine.refresh import ParentRefresher
+from gigaevo.evolution.strategies.base import MutationSelection
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
 from tests.evolution._fake_dag import FakeDag
@@ -72,7 +73,7 @@ class _FakeEngine:
         self._write_snapshot = _write_snapshot
 
         async def _select(*_args, **_kwargs):
-            return list(self._parents_to_select)
+            return MutationSelection(parents=list(self._parents_to_select))
 
         self._select_parents_for_mutation = _select
 
@@ -87,7 +88,16 @@ class _FakeEngine:
 def mock_generate_one_mutation(monkeypatch):
     """Patch generate_one_mutation to skip the LLM call and just return an id."""
 
-    async def _fake(parents, mutator, storage, state_manager, iteration, task_id):
+    async def _fake(
+        parents,
+        mutator,
+        storage,
+        state_manager,
+        iteration,
+        task_id,
+        route=None,
+        parent_roles=(),
+    ):
         new_id = str(uuid.uuid4())
         prog = Program(
             id=new_id,

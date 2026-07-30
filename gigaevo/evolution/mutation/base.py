@@ -6,6 +6,15 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from gigaevo.evolution.mutation.constants import (
+    MUTATION_PARENT_ROLES_METADATA_KEY,
+    MUTATION_REGIME_METADATA_KEY,
+    TARGET_ISLAND_METADATA_KEY,
+)
+from gigaevo.evolution.strategies.base import (
+    MutationRoute,
+    ParentRole,
+)
 from gigaevo.programs.program import Program
 
 if TYPE_CHECKING:
@@ -20,6 +29,9 @@ class MutationSpec(BaseModel):
     META_MODEL: ClassVar[str] = "mutation_model"
     META_OUTPUT: ClassVar[str] = "mutation_output"
     META_PROMPT_ID: ClassVar[str] = "prompt_id"
+    META_MUTATION_REGIME: ClassVar[str] = MUTATION_REGIME_METADATA_KEY
+    META_MUTATION_PARENT_ROLES: ClassVar[str] = MUTATION_PARENT_ROLES_METADATA_KEY
+    META_TARGET_ISLAND: ClassVar[str] = TARGET_ISLAND_METADATA_KEY
 
     code: str = Field(description="The code of the mutated program")
     parents: list[Program] = Field(description="List of parent programs")
@@ -66,6 +78,18 @@ class MutationOperator(ABC):
         Returns:
             MutationSpec if successful, None if no mutation could be generated
         """
+
+    async def mutate_with_route(
+        self,
+        selected_parents: list[Program],
+        route: MutationRoute | None,
+        parent_roles: tuple[ParentRole, ...] = (),
+    ) -> MutationSpec | None:
+        """Generate a mutation with optional pre-selected route guidance.
+
+        Legacy operators ignore the route and keep their existing API.
+        """
+        return await self.mutate_single(selected_parents)
 
     async def on_program_ingested(
         self,

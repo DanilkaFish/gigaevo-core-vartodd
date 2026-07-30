@@ -11,6 +11,10 @@ from gigaevo.evolution.mutation.constants import (
     MUTATION_CONTEXT_METADATA_KEY,
 )
 from gigaevo.evolution.mutation.utils import _DocstringRemover
+from gigaevo.evolution.strategies.base import MutationRoute, ParentRole
+from gigaevo.evolution.strategies.route_context import (
+    MutationRouteContextProvider,
+)
 from gigaevo.exceptions import MutationError
 from gigaevo.llm.agents.factories import create_mutation_agent
 from gigaevo.llm.models import MultiModelRouter
@@ -51,6 +55,7 @@ class LLMMutationOperator(MutationOperator):
         live_path_store_top_k: int = 6,
         mutation_regime_guidance: list | None = None,
         mutation_regime_probability: float = 1.0,
+        route_context_provider: MutationRouteContextProvider | None = None,
     ):
         self.problem_context = problem_context
         self.llm_wrapper = llm_wrapper
@@ -66,6 +71,7 @@ class LLMMutationOperator(MutationOperator):
         self.live_path_store_top_k = live_path_store_top_k
         self.mutation_regime_guidance = mutation_regime_guidance
         self.mutation_regime_probability = mutation_regime_probability
+        self.route_context_provider = route_context_provider
 
         self.agent = create_mutation_agent(
             llm=llm_wrapper,
@@ -79,6 +85,7 @@ class LLMMutationOperator(MutationOperator):
             live_path_store_top_k=live_path_store_top_k,
             mutation_regime_guidance=mutation_regime_guidance,
             mutation_regime_probability=mutation_regime_probability,
+            route_context_provider=route_context_provider,
         )
 
         logger.info(
@@ -127,6 +134,37 @@ class LLMMutationOperator(MutationOperator):
         Returns:
             MutationSpec if successful, None if no mutation could be generated
         """
+        return await self._mutate(
+            selected_parents,
+            explicit_regime_guidance=None,
+            explicit_route=None,
+            parent_roles=(),
+        )
+
+    async def mutate_with_route(
+        self,
+        selected_parents: list[Program],
+        route: MutationRoute | None,
+        parent_roles: tuple[ParentRole, ...] = (),
+    ) -> MutationSpec | None:
+        """Generate a mutation using the route selected before its parents."""
+        return await self._mutate(
+            selected_parents,
+            explicit_regime_guidance=(
+                route.guidance if route is not None else None
+            ),
+            explicit_route=route,
+            parent_roles=parent_roles,
+        )
+
+    async def _mutate(
+        self,
+        selected_parents: list[Program],
+        *,
+        explicit_regime_guidance: str | None,
+        explicit_route: MutationRoute | None,
+        parent_roles: tuple[ParentRole, ...],
+    ) -> MutationSpec | None:
         if not selected_parents:
             logger.warning("[LLMMutationOperator] No parents provided for mutation")
             return None
@@ -145,7 +183,11 @@ class LLMMutationOperator(MutationOperator):
             )
 
             result = await self.agent.arun(
-                input=parents_for_mutation, mutation_mode=self.mutation_mode
+                input=parents_for_mutation,
+                mutation_mode=self.mutation_mode,
+                explicit_regime_guidance=explicit_regime_guidance,
+                explicit_route=explicit_route,
+                parent_roles=parent_roles,
             )
 
             # Capture model name (works for both standard and bandit routers)

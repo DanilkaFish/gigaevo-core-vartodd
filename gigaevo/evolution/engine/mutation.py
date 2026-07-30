@@ -7,8 +7,12 @@ from gigaevo.database.state_manager import ProgramStateManager
 from gigaevo.evolution.mutation.base import MutationOperator, MutationSpec
 from gigaevo.evolution.mutation.constants import (
     MUTATION_MEMORY_SELECTED_IDS_METADATA_KEY,
+    MUTATION_PARENT_ROLES_METADATA_KEY,
+    MUTATION_REGIME_METADATA_KEY,
+    TARGET_ISLAND_METADATA_KEY,
 )
 from gigaevo.evolution.mutation.parent_selector import ParentSelector
+from gigaevo.evolution.strategies.base import MutationRoute, ParentRole
 from gigaevo.programs.program import Program
 
 
@@ -20,6 +24,8 @@ async def generate_one_mutation(
     state_manager: ProgramStateManager,
     iteration: int,
     task_id: int = 0,
+    route: MutationRoute | None = None,
+    parent_roles: tuple[ParentRole, ...] = (),
 ) -> str | None:
     """Generate a single mutation and persist it. Returns program ID if successful.
 
@@ -42,7 +48,11 @@ async def generate_one_mutation(
     """
     persisted_id: str | None = None
     try:
-        mutation_spec = await mutator.mutate_single(parents)
+        mutation_spec = (
+            await mutator.mutate_with_route(parents, route, parent_roles)
+            if route is not None
+            else await mutator.mutate_single(parents)
+        )
 
         if mutation_spec is None:
             logger.debug(
@@ -51,6 +61,13 @@ async def generate_one_mutation(
                 [p.short_id for p in parents],
             )
             return None
+
+        if route is not None:
+            mutation_spec.metadata[MUTATION_REGIME_METADATA_KEY] = route.regime_id
+            mutation_spec.metadata[TARGET_ISLAND_METADATA_KEY] = route.island_id
+            mutation_spec.metadata[MUTATION_PARENT_ROLES_METADATA_KEY] = list(
+                parent_roles
+            )
 
         program = Program.from_mutation_spec(mutation_spec)
         program.iteration = iteration

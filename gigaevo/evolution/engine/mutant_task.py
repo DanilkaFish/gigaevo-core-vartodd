@@ -12,11 +12,11 @@ Three ownership-handoff invariants govern every exit path:
    refilled within one event-loop tick — the producer pool is decoupled
    from the per-mutant DAG lifetime.
 
-2. **Buffer-sema slot**: acquired AFTER the LLM call returns and BEFORE
-   ``_in_flight.add``. Every exit either (a) adds the new mutant id to
-   ``engine._in_flight`` (transferring slot ownership; the ingestor will
-   release the slot when the mutant reaches DONE/DISCARDED), or (b)
-   releases the slot here. Never both, never neither.
+2. **Buffer-sema slot**: in strict mode it is acquired before parent
+   selection; otherwise it is acquired after the LLM call returns. Every exit
+   either (a) adds the new mutant id to ``engine._in_flight`` (transferring
+   slot ownership; the ingestor will release the slot when the mutant reaches
+   DONE/DISCARDED), or (b) releases the slot here. Never both, never neither.
 
 3. **Parent-refresh ticket**: ``refresh_with_ticket`` returns a ticket
    holding the per-parent-id locks. The producer extends lock-hold past
@@ -49,7 +49,22 @@ async def run_one_mutant(engine, task_id: int) -> str | None:
     ticket: ParentRefreshTicket | None = None
     new_id: str | None = None
     try:
-        parents = await engine._select_parents_for_mutation()
+        strict_in_flight = bool(
+            getattr(engine._ss_config, "strict_in_flight", False)
+        )
+        if strict_in_flight:
+            # In strict mode the slot represents the whole mutant lifecycle:
+            # parent selection/refresh, LLM generation, persistence, DAG
+            # evaluation, and ingestion. With all slots owned by active DAGs,
+            # producers wait here before observing parents or creating a
+            # QUEUED program, so no second persisted batch can accumulate.
+            await engine._buffer_sema.acquire()
+            buffer_held = True
+
+        selection = await engine._select_parents_for_mutation()
+        parents = selection.parents
+        route = selection.route
+        parent_roles = selection.parent_roles
         if not parents:
             # Empty archive — back off so dispatcher does not hot-spin while
             # the population is being seeded or while all programs are being
@@ -100,6 +115,8 @@ async def run_one_mutant(engine, task_id: int) -> str | None:
                 state_manager=engine.state,
                 iteration=my_iteration,
                 task_id=task_id,
+                route=route,
+                parent_roles=parent_roles,
             )
         finally:
             engine._llm_active -= 1
@@ -107,13 +124,12 @@ async def run_one_mutant(engine, task_id: int) -> str | None:
         if new_id is None:
             return None
 
-        # Buffer backpressure: block here when the DAG cannot keep up. The
-        # producer slot is still held during this wait — that is the design
-        # invariant. The producer pool's job is to keep N LLM calls (or
-        # ready-result-held producers) alive; the buffer pool gates
-        # registration in _in_flight. See spec § Architecture.
-        await engine._buffer_sema.acquire()
-        buffer_held = True
+        # Non-strict buffer backpressure begins only after generation, keeping
+        # LLM producers decoupled from DAG latency. Strict mode already owns
+        # this lifecycle slot from the beginning of the task.
+        if not buffer_held:
+            await engine._buffer_sema.acquire()
+            buffer_held = True
 
         # Transfer both the buffer slot AND the parent-refresh ticket
         # atomically under _in_flight_lock so the ingestor can later pair
