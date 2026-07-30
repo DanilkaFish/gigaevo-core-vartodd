@@ -3,7 +3,39 @@ from __future__ import annotations
 import abc
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field, computed_field, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    computed_field,
+    field_validator,
+    model_validator,
+)
+
+
+class MutationRouteConfig(BaseModel):
+    """Configuration for sampling a mutation regime before its parents."""
+
+    regime_id: str = Field(
+        min_length=1,
+        max_length=100,
+        pattern=r"^[a-zA-Z0-9_-]+$",
+    )
+    island_id: str = Field(
+        min_length=1,
+        max_length=100,
+        pattern=r"^[a-zA-Z0-9_-]+$",
+    )
+    probability: float = Field(gt=0.0)
+    guidance: str = Field(min_length=1)
+    context_profile: str = Field(default="default", min_length=1)
+
+    @field_validator("guidance", "context_profile")
+    @classmethod
+    def text_fields_must_not_be_whitespace(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("value must not be blank")
+        return stripped
 
 
 class BinningStrategy(BaseModel, abc.ABC):

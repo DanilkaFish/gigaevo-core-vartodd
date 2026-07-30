@@ -6,9 +6,33 @@ and the to_dict serialization.
 
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
+
 import pytest
 
-from gigaevo.evolution.strategies.base import EvolutionStrategy, StrategyMetrics
+from gigaevo.evolution.strategies.base import (
+    EvolutionStrategy,
+    MutationRoute,
+    MutationSelection,
+    StrategyMetrics,
+)
+from gigaevo.programs.program import Program
+
+
+class StubStrategy(EvolutionStrategy):
+    def __init__(self, parents: list[Program]):
+        self.parents = parents
+        self.selected_total: int | None = None
+
+    async def add(self, program):
+        return True
+
+    async def select_elites(self, total):
+        self.selected_total = total
+        return self.parents
+
+    async def get_program_ids(self):
+        return [parent.id for parent in self.parents]
 
 
 class TestStrategyMetrics:
@@ -126,3 +150,50 @@ class TestEvolutionStrategyDefaults:
         await s.resume()
         await s.restore_state()
         await s.reindex_archive()
+
+
+async def test_default_select_for_mutation_wraps_legacy_elites():
+    parents = [Program(code="def solve(): return 1")]
+    strategy = StubStrategy(parents)
+
+    selection = await strategy.select_for_mutation(total=1)
+
+    assert selection == MutationSelection(parents=parents, route=None)
+    assert strategy.selected_total == 1
+
+
+def test_mutation_route_is_immutable():
+    route = MutationRoute(
+        regime_id="ab_initio",
+        island_id="ab_initio",
+        guidance="Build from path_name='init'.",
+    )
+
+    with pytest.raises(FrozenInstanceError):
+        route.island_id = "near_end"  # type: ignore[misc]
+
+
+def test_mutation_route_carries_context_profile():
+    route = MutationRoute(
+        regime_id="near_end",
+        island_id="near_end",
+        guidance="Load a selectable path.",
+        context_profile="path_refinement",
+    )
+
+    assert route.context_profile == "path_refinement"
+
+
+def test_mutation_selection_roles_align_with_parents():
+    parents = [
+        Program(code="def solve(): return 1"),
+        Program(code="def solve(): return 2"),
+    ]
+
+    selection = MutationSelection(
+        parents=parents,
+        route=None,
+        parent_roles=("target_island", "mixed_donor"),
+    )
+
+    assert len(selection.parent_roles) == len(selection.parents)

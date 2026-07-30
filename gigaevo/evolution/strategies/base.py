@@ -1,9 +1,35 @@
 from abc import ABC, abstractmethod
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, computed_field
 
 from gigaevo.programs.program import Program
+
+ParentRole = Literal["target_island", "bootstrap_donor", "mixed_donor"]
+
+
+@dataclass(frozen=True, slots=True)
+class MutationRoute:
+    """A mutation regime bound to the island that owns its lineage."""
+
+    regime_id: str
+    island_id: str
+    guidance: str
+    context_profile: str = "default"
+
+
+@dataclass(frozen=True, slots=True)
+class MutationSelection:
+    """Parents selected together with their pre-sampled mutation route."""
+
+    parents: list[Program]
+    route: MutationRoute | None = None
+    parent_roles: tuple[ParentRole, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.parent_roles and len(self.parent_roles) != len(self.parents):
+            raise ValueError("parent_roles must align one-to-one with parents")
 
 
 class StrategyMetrics(BaseModel):
@@ -81,6 +107,16 @@ class EvolutionStrategy(ABC):
             List of selected elite programs
         """
         ...
+
+    async def select_for_mutation(self, total: int) -> MutationSelection:
+        """Select parents and optional route for one mutation.
+
+        Strategies without route-aware populations keep their legacy behavior.
+        """
+        return MutationSelection(
+            parents=await self.select_elites(total),
+            route=None,
+        )
 
     @abstractmethod
     async def get_program_ids(self) -> list[str]:
