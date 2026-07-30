@@ -392,3 +392,33 @@ Tests must verify:
 - evolutionary statistics and memory obey island boundaries;
 - refinement routes remain unavailable until a selectable path exists;
 - prompt-budget reduction is deterministic and never leaves a bare path name.
+
+## Operations
+
+Start a fresh GF16 island evolution in its own Redis database:
+
+```bash
+python run_gf_islands.py \
+  experiment=vartodd_evo_gf_islands_steady \
+  matrix=16 lb=380 ub=421 \
+  cache=false call_timeout=2800 \
+  max_concurrent_dags=12 max_in_flight=12 \
+  runner_config.prefetch_factor=1 \
+  redis.db=6
+```
+
+Resume that same database only with the same three-island topology:
+
+```bash
+python run_gf_islands.py \
+  experiment=vartodd_evo_gf_islands_steady \
+  matrix=16 lb=380 ub=421 \
+  cache=false call_timeout=2800 \
+  max_concurrent_dags=12 max_in_flight=12 \
+  runner_config.prefetch_factor=1 \
+  redis.db=6 redis.resume=true
+```
+
+The GF16 island experiment reads and writes saved paths only under
+`data_gf_islands16/path_backups`. The legacy launcher continues to use
+`vartodd_evo_gf16`, its legacy Redis prefix, and `data_gf16/path_backups`.

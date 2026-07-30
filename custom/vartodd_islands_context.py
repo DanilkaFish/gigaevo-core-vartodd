@@ -21,7 +21,6 @@ from gigaevo.programs.stages.collector import (
 from gigaevo.programs.stages.common import Box, StringContainer
 from gigaevo.programs.stages.stage_registry import StageRegistry
 
-
 _CONTEXT_BLOCK_RE = re.compile(
     r"(?ms)^## (?:Execution Signal Digest|Program Aux Excerpt)\b"
     r".*?(?=^---$|^## |\Z)"

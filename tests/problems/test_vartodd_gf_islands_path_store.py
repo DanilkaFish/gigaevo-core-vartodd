@@ -5,7 +5,6 @@ import json
 from pathlib import Path
 import sys
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PROBLEM_DIR = REPO_ROOT / "problems" / "vartodd_evo_gf_islands"
 LEGACY_DIR = REPO_ROOT / "problems" / "vartodd_evo_gf"

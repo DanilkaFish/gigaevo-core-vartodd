@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 import importlib.util
 import json
 import os
 from pathlib import Path
 import sys
 import tempfile
-from typing import Any, Sequence
+from typing import Any
 
 from variant import resolve_variant
 

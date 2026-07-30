@@ -22,6 +22,10 @@ from gigaevo.evolution.mutation.constants import (
     MUTATION_MEMORY_METADATA_KEY,
     ArchetypeName,
 )
+from gigaevo.evolution.strategies.base import MutationRoute, ParentRole
+from gigaevo.evolution.strategies.route_context import (
+    MutationRouteContextProvider,
+)
 from gigaevo.llm.agents.base import LangGraphAgent
 from gigaevo.llm.models import (
     MultiModelRouter,
@@ -32,10 +36,6 @@ from gigaevo.llm.token_tracking import llm_stage_context
 from gigaevo.monitoring.emit import emit as _emit_event
 from gigaevo.monitoring.events import LLMCall
 from gigaevo.programs.program import Program
-from gigaevo.evolution.strategies.base import MutationRoute, ParentRole
-from gigaevo.evolution.strategies.route_context import (
-    MutationRouteContextProvider,
-)
 
 if TYPE_CHECKING:
     from gigaevo.programs.metrics.context import MetricsContext

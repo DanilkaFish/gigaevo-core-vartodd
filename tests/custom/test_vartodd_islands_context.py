@@ -4,8 +4,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 from custom.vartodd_islands_context import (
     IslandEvolutionaryStatisticsCollector,
-    PathCardEnrichmentStage,
     PathCardEnrichmentInputs,
+    PathCardEnrichmentStage,
     VartoddIslandsRouteContextProvider,
 )
 from gigaevo.evolution.strategies.base import MutationRoute

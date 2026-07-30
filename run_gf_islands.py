@@ -19,7 +19,6 @@ from run_gf import (
     build_gf_environment,
 )
 
-
 LEGACY_SOURCE_ASSETS = (
     "helper.py",
     "node.py",
