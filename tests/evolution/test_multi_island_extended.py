@@ -60,6 +60,12 @@ def _make_multi_island(
     max_migrants_per_island: int = 5,
     mutation_routes: list[MutationRouteConfig | dict] | None = None,
     seed_island_map: dict[str, str] | None = None,
+    initial_island_id: str | None = None,
+    bootstrap_source_island: str | None = None,
+    bootstrap_until_size: int = 0,
+    bootstrap_mix_probability: float = 0.0,
+    steady_mix_probability: float = 0.0,
+    route_context_provider: MagicMock | None = None,
 ) -> tuple[MapElitesMultiIsland, dict[str, MagicMock], MagicMock]:
     """Return (multi, islands_dict, storage) with n mock islands."""
     storage = _mock_storage()
@@ -84,6 +90,12 @@ def _make_multi_island(
             max_migrants_per_island=max_migrants_per_island,
             mutation_routes=mutation_routes,
             seed_island_map=seed_island_map,
+            initial_island_id=initial_island_id,
+            bootstrap_source_island=bootstrap_source_island,
+            bootstrap_until_size=bootstrap_until_size,
+            bootstrap_mix_probability=bootstrap_mix_probability,
+            steady_mix_probability=steady_mix_probability,
+            route_context_provider=route_context_provider,
         )
 
     return multi, mock_islands, storage
@@ -145,6 +157,30 @@ class TestMultiIslandConstruction:
     def test_seed_map_must_reference_existing_island(self):
         with pytest.raises(ValueError, match="unknown island"):
             _make_multi_island(seed_island_map={"seed": "missing"})
+
+    @pytest.mark.parametrize(
+        "field,value,match",
+        [
+            ("initial_island_id", "missing", "unknown island"),
+            ("bootstrap_source_island", "missing", "unknown island"),
+            ("bootstrap_until_size", -1, "bootstrap_until_size"),
+            ("bootstrap_mix_probability", -0.1, "probability"),
+            ("bootstrap_mix_probability", 1.1, "probability"),
+            ("steady_mix_probability", -0.1, "probability"),
+            ("steady_mix_probability", 1.1, "probability"),
+        ],
+    )
+    def test_rejects_invalid_bootstrap_configuration(self, field, value, match):
+        kwargs = {field: value}
+        with pytest.raises(ValueError, match=match):
+            _make_multi_island(**kwargs)
+
+    def test_rejects_ambiguous_initial_program_placement(self):
+        with pytest.raises(ValueError, match="initial_island_id"):
+            _make_multi_island(
+                initial_island_id="island_0",
+                seed_island_map={"seed": "island_1"},
+            )
 
     def test_routed_topology_rejects_enabled_migration(self):
         with pytest.raises(ValueError, match="migration must be disabled"):
@@ -302,6 +338,22 @@ class TestMultiIslandAdd:
         assert await multi.add(root) is False
         multi.mutant_router.route_mutant.assert_not_awaited()
 
+    async def test_all_initial_roots_use_initial_island(self):
+        multi, islands, _ = _make_multi_island(
+            n=3,
+            initial_island_id="island_0",
+        )
+        root = _prog()
+        root.metadata.update(
+            source="initial_program",
+            strategy_name="any_seed",
+        )
+        multi.mutant_router.route_mutant = AsyncMock()
+
+        assert await multi.add(root) is True
+        islands["island_0"].add.assert_awaited_once_with(root)
+        multi.mutant_router.route_mutant.assert_not_awaited()
+
 
 # ---------------------------------------------------------------------------
 # select_elites() — quota, generation increment, sampling
@@ -367,6 +419,209 @@ class TestMultiIslandSelectElites:
 
 
 class TestMultiIslandSelectForMutation:
+    async def test_empty_target_uses_two_bootstrap_donors(self, monkeypatch):
+        multi, islands, _ = _make_multi_island(
+            n=3,
+            enable_migration=False,
+            mutation_routes=[_route("mid_margin", "island_1")],
+            bootstrap_source_island="island_0",
+            bootstrap_until_size=8,
+            bootstrap_mix_probability=0.70,
+            steady_mix_probability=0.10,
+        )
+        donors = [_prog("island_0"), _prog("island_0")]
+        islands["island_0"].__len__ = AsyncMock(return_value=8)
+        islands["island_1"].__len__ = AsyncMock(return_value=0)
+        islands["island_0"].select_elites = AsyncMock(return_value=donors)
+        monkeypatch.setattr(
+            "gigaevo.evolution.strategies.multi_island.random.choices",
+            lambda choices, weights, k: [choices[0]],
+        )
+
+        selection = await multi.select_for_mutation(2)
+
+        assert selection.parents == donors
+        assert selection.parent_roles == (
+            "bootstrap_donor",
+            "bootstrap_donor",
+        )
+        assert selection.route is not None
+        assert selection.route.island_id == "island_1"
+
+    async def test_small_target_forces_mix_when_only_one_local(self, monkeypatch):
+        multi, islands, _ = _make_multi_island(
+            n=3,
+            enable_migration=False,
+            mutation_routes=[_route("mid_margin", "island_1")],
+            bootstrap_source_island="island_0",
+            bootstrap_until_size=8,
+            bootstrap_mix_probability=0.0,
+        )
+        local = _prog("island_1")
+        donor = _prog("island_0")
+        islands["island_0"].__len__ = AsyncMock(return_value=8)
+        islands["island_1"].__len__ = AsyncMock(return_value=1)
+        islands["island_1"].select_elites = AsyncMock(return_value=[local])
+        islands["island_0"].select_elites = AsyncMock(return_value=[donor])
+        monkeypatch.setattr(
+            "gigaevo.evolution.strategies.multi_island.random.choices",
+            lambda choices, weights, k: [choices[0]],
+        )
+
+        selection = await multi.select_for_mutation(2)
+
+        assert selection.parents == [local, donor]
+        assert selection.parent_roles == (
+            "target_island",
+            "bootstrap_donor",
+        )
+
+    @pytest.mark.parametrize(
+        "target_size,random_value,expect_mix",
+        [
+            (7, 0.69, True),
+            (7, 0.70, False),
+            (8, 0.09, True),
+            (8, 0.10, False),
+        ],
+    )
+    async def test_mixing_probability_boundaries(
+        self,
+        monkeypatch,
+        target_size,
+        random_value,
+        expect_mix,
+    ):
+        multi, islands, _ = _make_multi_island(
+            n=3,
+            enable_migration=False,
+            mutation_routes=[_route("mid_margin", "island_1")],
+            bootstrap_source_island="island_0",
+            bootstrap_until_size=8,
+            bootstrap_mix_probability=0.70,
+            steady_mix_probability=0.10,
+        )
+        locals_ = [_prog("island_1"), _prog("island_1")]
+        donor = _prog("island_0")
+        islands["island_0"].__len__ = AsyncMock(return_value=8)
+        islands["island_1"].__len__ = AsyncMock(return_value=target_size)
+        islands["island_2"].__len__ = AsyncMock(return_value=0)
+        islands["island_1"].select_elites = AsyncMock(return_value=locals_)
+        islands["island_0"].select_elites = AsyncMock(return_value=[donor])
+        monkeypatch.setattr(
+            "gigaevo.evolution.strategies.multi_island.random.random",
+            lambda: random_value,
+        )
+        monkeypatch.setattr(
+            "gigaevo.evolution.strategies.multi_island.random.choices",
+            lambda choices, weights, k: [choices[0]],
+        )
+        monkeypatch.setattr(
+            "gigaevo.evolution.strategies.multi_island.random.choice",
+            lambda choices: choices[0],
+        )
+
+        selection = await multi.select_for_mutation(2)
+
+        assert ("mixed_donor" in selection.parent_roles) is (
+            expect_mix and target_size >= 8
+        )
+        assert ("bootstrap_donor" in selection.parent_roles) is (
+            expect_mix and target_size < 8
+        )
+
+    async def test_established_target_replaces_at_most_one_parent(
+        self, monkeypatch
+    ):
+        multi, islands, _ = _make_multi_island(
+            n=3,
+            enable_migration=False,
+            mutation_routes=[_route("near_end", "island_2")],
+            bootstrap_source_island="island_0",
+            bootstrap_until_size=8,
+            steady_mix_probability=1.0,
+        )
+        local = _prog("island_2")
+        donor = _prog("island_1")
+        islands["island_0"].__len__ = AsyncMock(return_value=8)
+        islands["island_1"].__len__ = AsyncMock(return_value=8)
+        islands["island_2"].__len__ = AsyncMock(return_value=8)
+        islands["island_2"].select_elites = AsyncMock(return_value=[local])
+        islands["island_1"].select_elites = AsyncMock(return_value=[donor])
+        monkeypatch.setattr(
+            "gigaevo.evolution.strategies.multi_island.random.choices",
+            lambda choices, weights, k: [choices[0]],
+        )
+        chosen: list[tuple[str, ...]] = []
+
+        def choose_donor(choices):
+            chosen.append(tuple(choices))
+            return "island_1"
+
+        monkeypatch.setattr(
+            "gigaevo.evolution.strategies.multi_island.random.choice",
+            choose_donor,
+        )
+
+        selection = await multi.select_for_mutation(2)
+
+        assert chosen == [("island_0", "island_1")]
+        assert selection.parents == [local, donor]
+        assert selection.parent_roles == ("target_island", "mixed_donor")
+
+    async def test_context_provider_can_exclude_route(self, monkeypatch):
+        provider = MagicMock()
+        provider.route_is_available.side_effect = (
+            lambda route: route.regime_id == "available"
+        )
+        multi, islands, _ = _make_multi_island(
+            n=2,
+            enable_migration=False,
+            mutation_routes=[
+                _route("blocked", "island_0", 100.0),
+                _route("available", "island_1", 1.0),
+            ],
+            route_context_provider=provider,
+        )
+        parent = _prog("island_1")
+        for island in islands.values():
+            island.__len__ = AsyncMock(return_value=1)
+        islands["island_1"].select_elites = AsyncMock(return_value=[parent])
+        monkeypatch.setattr(
+            "gigaevo.evolution.strategies.multi_island.random.choices",
+            lambda choices, weights, k: [choices[0]],
+        )
+
+        selection = await multi.select_for_mutation(1)
+
+        assert selection.route is not None
+        assert selection.route.regime_id == "available"
+        assert provider.route_is_available.call_count == 2
+
+    async def test_duplicate_parent_ids_are_not_returned(self, monkeypatch):
+        multi, islands, _ = _make_multi_island(
+            n=2,
+            enable_migration=False,
+            mutation_routes=[_route("mid_margin", "island_1")],
+            bootstrap_source_island="island_0",
+            bootstrap_until_size=8,
+        )
+        duplicate = _prog("island_0")
+        islands["island_0"].__len__ = AsyncMock(return_value=2)
+        islands["island_1"].__len__ = AsyncMock(return_value=0)
+        islands["island_0"].select_elites = AsyncMock(
+            return_value=[duplicate, duplicate]
+        )
+        monkeypatch.setattr(
+            "gigaevo.evolution.strategies.multi_island.random.choices",
+            lambda choices, weights, k: [choices[0]],
+        )
+
+        selection = await multi.select_for_mutation(2)
+
+        assert selection.parents == [duplicate]
+        assert selection.parent_roles == ("bootstrap_donor",)
+
     async def test_uses_only_sampled_route_island(self, monkeypatch):
         routes = [
             _route("ab_initio", "island_0", 0.40),
