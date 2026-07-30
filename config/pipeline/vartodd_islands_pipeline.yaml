@@ -1,0 +1,123 @@
+# @package _global_
+
+defaults:
+  - vartodd_pipeline
+  - _self_
+
+# The legacy VarTODD DAG is inherited intact. Only archive statistics and
+# saved-path evidence ownership differ in the isolated island experiment.
+dag_blueprint:
+  nodes:
+    EvolutionaryStatisticsCollector:
+      _target_: custom.vartodd_islands_context.IslandEvolutionaryStatisticsCollector
+      _partial_: true
+      storage: ${ref:redis_storage}
+      metrics_context: ${metrics_context}
+      timeout: ${stage_timeout}
+
+    PathCardEnrichmentStage:
+      _target_: custom.vartodd_islands_context.PathCardEnrichmentStage
+      _partial_: true
+      problem_dir: ${problem.dir}
+      timeout: 60
+
+  data_flow_edges:
+    - source_stage: CallProgramFunction
+      destination_stage: CallValidatorFunction
+      input_name: payload
+
+    - source_stage: CallValidatorFunction
+      destination_stage: DistillMetrics
+      input_name: data
+
+    - source_stage: CallValidatorFunction
+      destination_stage: DistillNonMetrics
+      input_name: data
+
+    - source_stage: DistillNonMetrics
+      destination_stage: EnsureNonMetricsStage
+      input_name: data
+
+    - source_stage: ComputeComplexityStage
+      destination_stage: MergeMetricsStage1
+      input_name: first
+
+    - source_stage: DistillMetrics
+      destination_stage: MergeMetricsStage1
+      input_name: second
+
+    - source_stage: MergeMetricsStage1
+      destination_stage: MergeMetricsStage2
+      input_name: first
+
+    - source_stage: ComputeTimeStage
+      destination_stage: MergeMetricsStage2
+      input_name: second
+
+    - source_stage: MergeMetricsStage2
+      destination_stage: EnsureMetricsStage
+      input_name: candidate
+
+    - source_stage: EnsureMetricsStage
+      destination_stage: MutationContextStage
+      input_name: metrics
+
+    - source_stage: InsightsStage
+      destination_stage: MutationContextStage
+      input_name: insights
+
+    - source_stage: EnsureNonMetricsStage
+      destination_stage: MutationContextStage
+      input_name: non_metrics
+
+    - source_stage: EnsureNonMetricsStage
+      destination_stage: ExecutionDigestStage
+      input_name: data
+
+    - source_stage: DescendantProgramIds
+      destination_stage: LineagesToDescendants
+      input_name: descendant_ids
+
+    - source_stage: AncestorProgramIds
+      destination_stage: LineagesFromAncestors
+      input_name: ancestor_ids
+
+    - source_stage: LineagesToDescendants
+      destination_stage: MutationContextStage
+      input_name: lineage_descendants
+
+    - source_stage: LineagesFromAncestors
+      destination_stage: MutationContextStage
+      input_name: lineage_ancestors
+
+    - source_stage: EvolutionaryStatisticsCollector
+      destination_stage: MutationContextStage
+      input_name: evolutionary_statistics
+
+    - source_stage: ExecutionDigestStage
+      destination_stage: MutationContextStage
+      input_name: formatted
+
+    - source_stage: EnsureMetricsStage
+      destination_stage: PathCardEnrichmentStage
+      input_name: metrics
+
+    - source_stage: EnsureNonMetricsStage
+      destination_stage: PathCardEnrichmentStage
+      input_name: non_metrics
+
+    - source_stage: ComputeTimeStage
+      destination_stage: PathCardEnrichmentStage
+      input_name: runtime
+
+  exec_order_deps:
+    PathCardEnrichmentStage:
+      - _target_: gigaevo.programs.dag.automata.ExecutionOrderDependency
+        stage_name: EnsureMetricsStage
+        condition: always
+      - _target_: gigaevo.programs.dag.automata.ExecutionOrderDependency
+        stage_name: EnsureNonMetricsStage
+        condition: always
+      - _target_: gigaevo.programs.dag.automata.ExecutionOrderDependency
+        stage_name: ComputeTimeStage
+        condition: always
