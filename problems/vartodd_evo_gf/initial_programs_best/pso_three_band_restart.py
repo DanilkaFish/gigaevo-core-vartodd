@@ -24,8 +24,8 @@ from pymoo.optimize import minimize
 
 OPTIMIZER_FAMILY = "pymoo_pso_three_band_restart"
 SEEDS = [23, 24, 25]
-SCOUT_EVALS = 1200
-MID_REFINE_EVALS = 800
+SCOUT_EVALS = 600
+MID_REFINE_EVALS = 400
 RANK_SPAN = max(1, INITIAL_RANK - TARGET_FINAL_RANK)
 MAX_DEPTH = max(500, RANK_SPAN + 64)
 

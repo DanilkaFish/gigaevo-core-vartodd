@@ -46,6 +46,26 @@ ARCHETYPE_MARKERS = {
     "pso_three_band_restart.py": ("MID_REFINE_EVALS", "set_up_new_init"),
     "pso_pattern_heavy_restart.py": ("PatternSearch", "use_heavy_todd"),
 }
+EXPECTED_EVALUATION_BUDGETS = {
+    "de_light_terminal_todd.py": {"TOTAL_EVALS": 3800},
+    "pso_restart_terminal_todd.py": {"TOTAL_EVALS": 1500},
+    "pso_tohpe_only.py": {"TOTAL_EVALS": 2500},
+    "pso_wide_terminal_beam.py": {"TOTAL_EVALS": 2500},
+    "pso_chunked_light_todd.py": {"TOTAL_EVALS": 1000},
+    "pso_cma_grouped_tail.py": {
+        "SCOUT_EVALS": 72,
+        "SCORE_REFINE_EVALS": 256,
+        "SEARCH_REFINE_EVALS": 32,
+    },
+    "pso_three_band_restart.py": {
+        "SCOUT_EVALS": 600,
+        "MID_REFINE_EVALS": 400,
+    },
+    "pso_pattern_heavy_restart.py": {
+        "SCOUT_EVALS": 64,
+        "TAIL_EVALS": 96,
+    },
+}
 
 
 def _program_paths(names: set[str]) -> list[Path]:
@@ -80,6 +100,20 @@ def _map_par_calls_without_group(tree: ast.Module) -> list[int]:
         if not any(keyword.arg == "group" for keyword in node.keywords):
             missing.append(node.lineno)
     return missing
+
+
+def _integer_assignments(tree: ast.Module) -> dict[str, int]:
+    assignments = {}
+    for node in tree.body:
+        if (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and isinstance(node.value, ast.Constant)
+            and isinstance(node.value.value, int)
+        ):
+            assignments[node.targets[0].id] = node.value.value
+    return assignments
 
 
 def test_core_programs_exist() -> None:
@@ -143,6 +177,17 @@ def test_programs_use_only_pymoo_optimizer_imports() -> None:
         assert "scipy.optimize" not in source
 
 
-def test_active_initial_pool_is_not_rewired() -> None:
+def test_launcher_registers_the_curated_best_pool() -> None:
     run_gf = (REPO_ROOT / "run_gf.py").read_text(encoding="utf-8")
-    assert '"initial_programs_best"' not in run_gf
+    assert '"best": "initial_programs_best"' in run_gf
+
+
+def test_programs_use_the_approved_evaluation_budgets() -> None:
+    for path in _program_paths(EXPECTED_FILES):
+        assignments = _integer_assignments(
+            ast.parse(path.read_text(encoding="utf-8"))
+        )
+        expected = EXPECTED_EVALUATION_BUDGETS[path.name]
+        assert {
+            name: assignments[name] for name in expected
+        } == expected

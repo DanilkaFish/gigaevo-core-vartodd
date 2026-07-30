@@ -24,7 +24,7 @@ from pymoo.optimize import minimize
 
 OPTIMIZER_FAMILY = "pymoo_chunked_pso_light_todd"
 SEEDS = [23, 24, 25]
-TOTAL_EVALS = 2000
+TOTAL_EVALS = 1000
 CHUNK_EVALS = 600
 PATIENCE_CHUNKS = 2
 RANK_SPAN = max(1, INITIAL_RANK - TARGET_FINAL_RANK)

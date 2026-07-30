@@ -24,7 +24,7 @@ from pymoo.optimize import minimize
 
 OPTIMIZER_FAMILY = "pymoo_de_light_terminal_todd"
 SEEDS = [23, 24, 25]
-TOTAL_EVALS = 8000
+TOTAL_EVALS = 3800
 RANK_SPAN = max(1, INITIAL_RANK - TARGET_FINAL_RANK)
 MAX_DEPTH = max(500, RANK_SPAN + 64)
 
