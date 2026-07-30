@@ -130,46 +130,85 @@ def test_experiment_variant_composes(variant: str):
     )
 
 
-def test_vartodd_tohpe_updated_steady_experiment_contract():
+def test_vartodd_gf_islands_steady_experiment_contract():
     cfg = _compose_with_experiment_problem(
-        "experiment=vartodd_evo_tohpe_updated_steady"
+        "experiment=vartodd_evo_gf_islands_steady",
+        "problem.name=vartodd_evo_gf_islands16",
     )
 
-    assert cfg.problem.name == "vartodd_evo_tohpe_updated"
+    assert cfg.problem.name == "vartodd_evo_gf_islands16"
     assert (
         cfg.evolution_engine._target_
         == "gigaevo.evolution.engine.SteadyStateEvolutionEngine"
     )
     assert cfg.num_parents == 2
 
-    # Six DAGs execute while another six are pre-created and wait on the
-    # runner semaphore.
+    # One runner batch only: no runner-side waiting tasks.
     assert cfg.runner_config.max_concurrent_dags == 6
-    assert cfg.runner_config.prefetch_factor == 2
+    assert cfg.runner_config.prefetch_factor == 1
 
-    # The steady engine's two-semaphore pipeline uses six producer slots and
-    # six completed-mutation buffer slots.
+    # Strict mode acquires one of the six buffer slots before mutation
+    # production, so generated children cannot wait behind six active DAGs.
     assert cfg.engine_config.max_in_flight == 6
+    assert cfg.engine_config.strict_in_flight is True
 
-    # Keep the proven GF16 weighted selector. Steady state requests one pair
-    # from it per mutation instead of constructing a batch parent pool.
-    selector = cfg.islands[0].elite_selector
+    assert [island.island_id for island in cfg.islands] == [
+        "ab_initio",
+        "mid_margin",
+        "near_end",
+    ]
+    spaces = [island.behavior_space for island in cfg.islands]
+    assert len({id(space) for space in spaces}) == 3
+    assert all(island.max_size == 20 for island in cfg.islands)
+    assert all(island.elite_selector.lambda_ == 5.0 for island in cfg.islands)
+    assert cfg.evolution_strategy.enable_migration is False
+    assert cfg.evolution_strategy.initial_island_id == "ab_initio"
+    assert cfg.evolution_strategy.bootstrap_source_island == "ab_initio"
+    assert cfg.evolution_strategy.bootstrap_until_size == 8
+    assert cfg.evolution_strategy.bootstrap_mix_probability == 0.70
+    assert cfg.evolution_strategy.steady_mix_probability == 0.10
+    assert "seed_island_map" not in cfg.evolution_strategy
+
+    routes = cfg.evolution_strategy.mutation_routes
+    assert [
+        (
+            route.regime_id,
+            route.island_id,
+            route.probability,
+            route.context_profile,
+        )
+        for route in routes
+    ] == [
+        ("ab_initio", "ab_initio", 0.40, "ab_initio"),
+        ("mid_margin", "mid_margin", 0.35, "path_refinement"),
+        ("near_end", "near_end", 0.25, "path_refinement"),
+    ]
+    guidance = " ".join("\n".join(route.guidance for route in routes).split())
+    assert 'path_name="init"' in guidance
+    assert "margin 30..100" in guidance
+    assert "margin 5..30" in guidance
+    assert "Selectable Shared Paths" in guidance
+    assert "TOHPEprefix" not in guidance
+
+    assert list(cfg.mutation_operator.mutation_regime_guidance) == []
+    assert cfg.mutation_operator.mutation_regime_probability == 0.0
+    assert cfg.mutation_operator.live_path_store_root_dir is None
     assert (
-        selector._target_
-        == "gigaevo.evolution.strategies.map_elites.WeightedEliteSelector"
+        cfg.vartodd_islands_route_context._target_
+        == "custom.vartodd_islands_context.VartoddIslandsRouteContextProvider"
     )
-    assert selector.lambda_ == 5.0
 
-    regimes = cfg.mutation_operator.mutation_regime_guidance
-    assert [regime.probability for regime in regimes] == [0.55, 0.45]
-    guidance = " ".join(
-        "\n".join(regime.text for regime in regimes).split()
+
+def test_legacy_vartodd_gf_experiment_remains_single_island():
+    cfg = _compose_with_experiment_problem(
+        "experiment=vartodd_evo_tohpe_updated_steady",
+        "problem.name=vartodd_evo_gf16",
     )
-    assert "standalone TOHPE sampling modest" in guidance
-    assert "one-hot and low-weight sparse" in guidance
-    assert "TOHPEprefix" in guidance
-    assert "cheaper but less expressive than full TODD" in guidance
-    assert "10 researched" not in guidance
+
+    assert len(cfg.islands) == 1
+    assert cfg.islands[0].island_id == cfg.island_id
+    assert "mutation_routes" not in cfg.evolution_strategy
+    assert "initial_island_id" not in cfg.evolution_strategy
 
 
 @pytest.mark.parametrize("variant", _group_choices("algorithm"))

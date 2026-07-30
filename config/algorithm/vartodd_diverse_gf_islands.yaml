@@ -1,0 +1,204 @@
+# @package _global_
+
+# Three independent parent populations share one matrix-specific Path Store.
+defaults:
+  - vartodd_diverse_gf16
+  - _self_
+
+vartodd_islands_route_context:
+  _target_: custom.vartodd_islands_context.VartoddIslandsRouteContextProvider
+  problem_dir: ${problem.dir}
+  selectable_path_top_k: 8
+  path_cards_max_chars: 24000
+  parent_aux_max_chars: 12000
+
+mutation_operator:
+  # The strategy selects one required regime before selecting its parents.
+  mutation_regime_guidance: []
+  mutation_regime_probability: 0.0
+  live_path_store_root_dir: null
+  route_context_provider: ${ref:vartodd_islands_route_context}
+
+ab_initio_behavior_space:
+  _target_: gigaevo.config.helpers.build_behavior_space
+  keys:
+    - ${primary_key}
+    - runtime
+    - loaded_rank
+    - ${validity_key}
+  bounds:
+    - ${primary_bounds}
+    - ${runtime_bounds}
+    - ${loaded_rank_bounds}
+    - ${validity_bounds}
+  resolutions: [25, 4, 10, 2]
+  binning_types:
+    - ${binning_type}
+    - linear
+    - linear
+    - linear
+  dynamic: true
+  expansion_buffer_ratio: 0.1
+
+mid_margin_behavior_space:
+  _target_: gigaevo.config.helpers.build_behavior_space
+  keys:
+    - ${primary_key}
+    - runtime
+    - loaded_rank
+    - ${validity_key}
+  bounds:
+    - ${primary_bounds}
+    - ${runtime_bounds}
+    - ${loaded_rank_bounds}
+    - ${validity_bounds}
+  resolutions: [25, 4, 10, 2]
+  binning_types:
+    - ${binning_type}
+    - linear
+    - linear
+    - linear
+  dynamic: true
+  expansion_buffer_ratio: 0.1
+
+near_end_behavior_space:
+  _target_: gigaevo.config.helpers.build_behavior_space
+  keys:
+    - ${primary_key}
+    - runtime
+    - loaded_rank
+    - ${validity_key}
+  bounds:
+    - ${primary_bounds}
+    - ${runtime_bounds}
+    - ${loaded_rank_bounds}
+    - ${validity_bounds}
+  resolutions: [25, 4, 10, 2]
+  binning_types:
+    - ${binning_type}
+    - linear
+    - linear
+    - linear
+  dynamic: true
+  expansion_buffer_ratio: 0.1
+
+islands:
+  - _target_: gigaevo.evolution.strategies.map_elites.IslandConfig
+    island_id: ab_initio
+    max_size: 20
+    behavior_space: ${ab_initio_behavior_space}
+    archive_selector:
+      _target_: custom.archive_selectors.RankAwareRetentionSelector
+      fitness_keys:
+        - ${primary_key}
+      fitness_key_higher_is_better:
+        - ${higher_is_better}
+    elite_selector:
+      _target_: gigaevo.evolution.strategies.map_elites.WeightedEliteSelector
+      fitness_key: ${primary_key}
+      fitness_key_higher_is_better: ${higher_is_better}
+      lambda_: 5.0
+      epsilon: 1e-8
+    archive_remover:
+      _target_: gigaevo.evolution.strategies.map_elites.FitnessArchiveRemover
+      fitness_key: ${primary_key}
+      fitness_key_higher_is_better: ${higher_is_better}
+    migrant_selector:
+      _target_: gigaevo.evolution.strategies.map_elites.TopFitnessMigrantSelector
+      fitness_key: ${primary_key}
+      fitness_key_higher_is_better: ${higher_is_better}
+
+  - _target_: gigaevo.evolution.strategies.map_elites.IslandConfig
+    island_id: mid_margin
+    max_size: 20
+    behavior_space: ${mid_margin_behavior_space}
+    archive_selector:
+      _target_: custom.archive_selectors.RankAwareRetentionSelector
+      fitness_keys:
+        - ${primary_key}
+      fitness_key_higher_is_better:
+        - ${higher_is_better}
+    elite_selector:
+      _target_: gigaevo.evolution.strategies.map_elites.WeightedEliteSelector
+      fitness_key: ${primary_key}
+      fitness_key_higher_is_better: ${higher_is_better}
+      lambda_: 5.0
+      epsilon: 1e-8
+    archive_remover:
+      _target_: gigaevo.evolution.strategies.map_elites.FitnessArchiveRemover
+      fitness_key: ${primary_key}
+      fitness_key_higher_is_better: ${higher_is_better}
+    migrant_selector:
+      _target_: gigaevo.evolution.strategies.map_elites.TopFitnessMigrantSelector
+      fitness_key: ${primary_key}
+      fitness_key_higher_is_better: ${higher_is_better}
+
+  - _target_: gigaevo.evolution.strategies.map_elites.IslandConfig
+    island_id: near_end
+    max_size: 20
+    behavior_space: ${near_end_behavior_space}
+    archive_selector:
+      _target_: custom.archive_selectors.RankAwareRetentionSelector
+      fitness_keys:
+        - ${primary_key}
+      fitness_key_higher_is_better:
+        - ${higher_is_better}
+    elite_selector:
+      _target_: gigaevo.evolution.strategies.map_elites.WeightedEliteSelector
+      fitness_key: ${primary_key}
+      fitness_key_higher_is_better: ${higher_is_better}
+      lambda_: 5.0
+      epsilon: 1e-8
+    archive_remover:
+      _target_: gigaevo.evolution.strategies.map_elites.FitnessArchiveRemover
+      fitness_key: ${primary_key}
+      fitness_key_higher_is_better: ${higher_is_better}
+    migrant_selector:
+      _target_: gigaevo.evolution.strategies.map_elites.TopFitnessMigrantSelector
+      fitness_key: ${primary_key}
+      fitness_key_higher_is_better: ${higher_is_better}
+
+evolution_strategy:
+  _target_: gigaevo.evolution.strategies.map_elites.MapElitesMultiIsland
+  island_configs: ${islands}
+  program_storage: ${ref:redis_storage}
+  migration_interval: ${migration_interval}
+  enable_migration: false
+  max_migrants_per_island: ${max_migrants_per_island}
+  initial_island_id: ab_initio
+  bootstrap_source_island: ab_initio
+  bootstrap_until_size: 8
+  bootstrap_mix_probability: 0.70
+  steady_mix_probability: 0.10
+  route_context_provider: ${ref:vartodd_islands_route_context}
+  mutation_routes:
+    - regime_id: ab_initio
+      island_id: ab_initio
+      probability: 0.40
+      context_profile: ab_initio
+      guidance: |
+        ## Required Island Regime: Ab-initio search
+        Start from Evaluator(path_name="init"). Build a complete reusable path
+        with standalone TOHPE as the main early source and TODD disabled or
+        light until lower-rank evidence supports a schedule.
+    - regime_id: mid_margin
+      island_id: mid_margin
+      probability: 0.35
+      context_profile: path_refinement
+      guidance: |
+        ## Required Island Regime: Medium-margin path refinement
+        Load an exact name from Selectable Shared Paths with margin 30..100.
+        Branch before the inherited tail so the policy, source balance,
+        restart placement, and trajectory can change materially.
+    - regime_id: near_end
+      island_id: near_end
+      probability: 0.25
+      context_profile: path_refinement
+      guidance: |
+        ## Required Island Regime: Near-end refinement
+        Load an exact current Selectable Shared Paths card with margin 5..30.
+        Small-margin plateaus require plateau-resilient initialization or
+        optimizer settings, restarts, or a beam wide enough to research most
+        plausible trajectories. In terminal regions TODD may be the only
+        source of positive actions; action starvation can justify broader
+        max_buckets and a non-binding limit_bucket.

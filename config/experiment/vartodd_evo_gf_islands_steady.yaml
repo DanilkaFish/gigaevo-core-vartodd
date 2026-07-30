@@ -1,0 +1,24 @@
+# @package _global_
+
+# Dedicated three-island steady-state VarTODD GF experiment.
+defaults:
+  - base
+  - override /pipeline: vartodd_islands_pipeline
+  - override /algorithm: vartodd_diverse_gf_islands
+  - override /llm: openrouter_vartodd_evolution
+  - override /evolution: steady_state
+  - _self_
+
+num_parents: 2
+
+max_in_flight: 6
+engine_config:
+  max_in_flight: ${max_in_flight}
+  strict_in_flight: true
+
+max_concurrent_dags: 6
+runner_config:
+  prefetch_factor: 1
+
+vartodd_call_timeout: 3800
+vartodd_soft_timeout_grace_s: 200
