@@ -183,12 +183,7 @@ def test_vartodd_gf_islands_steady_experiment_contract():
         ("mid_margin", "mid_margin", 0.35, "path_refinement"),
         ("near_end", "near_end", 0.25, "path_refinement"),
     ]
-    guidance = " ".join("\n".join(route.guidance for route in routes).split())
-    assert 'path_name="init"' in guidance
-    assert "margin 30..100" in guidance
-    assert "margin 5..30" in guidance
-    assert "Selectable Shared Paths" in guidance
-    assert "TOHPEprefix" not in guidance
+    assert all("guidance" not in route for route in routes)
 
     assert list(cfg.mutation_operator.mutation_regime_guidance) == []
     assert cfg.mutation_operator.mutation_regime_probability == 0.0

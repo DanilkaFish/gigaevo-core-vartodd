@@ -1,0 +1,6 @@
+## Required Island Regime: Ab-initio search
+
+Start from `Evaluator(path_name="init")` and construct a complete reusable
+path. Use standalone TOHPE as the main early action source. Keep TODD disabled
+or light until lower-rank execution evidence supports a scheduled transition.
+Do not load or infer a saved path.

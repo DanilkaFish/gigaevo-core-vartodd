@@ -25,6 +25,7 @@ _CONTEXT_BLOCK_RE = re.compile(
     r"(?ms)^## (?:Execution Signal Digest|Program Aux Excerpt)\b"
     r".*?(?=^---$|^## |\Z)"
 )
+_REGIME_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 _AUX_SECTION_ORDER = (
     "path_summary",
     "path_policy_groups",
@@ -118,6 +119,34 @@ class VartoddIslandsRouteContextProvider(_PathStoreClient):
         if route.context_profile == "path_refinement":
             return bool(self._path_store().has_selectable_paths())
         return True
+
+    def build_route_guidance(self, route: MutationRoute) -> str:
+        regime_id = route.regime_id
+        if _REGIME_ID_RE.fullmatch(regime_id) is None:
+            raise ValueError(
+                f"unsafe mutation regime id for prompt overlay: {regime_id!r}"
+            )
+        path = (
+            self.problem_dir
+            / "prompts"
+            / "islands"
+            / f"{regime_id}.txt"
+        )
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"missing prompt overlay for route {regime_id!r}: {path}"
+            )
+        try:
+            guidance = path.read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            raise OSError(
+                f"cannot read prompt overlay for route {regime_id!r}: {path}"
+            ) from exc
+        if not guidance:
+            raise ValueError(
+                f"blank prompt overlay for route {regime_id!r}: {path}"
+            )
+        return guidance
 
     def build_assignment(
         self,

@@ -96,7 +96,7 @@ class _CaptureRouteMutator(MutationOperator):
         blocks.extend(
             [
                 self.provider.build_external_context(route),
-                route.guidance,
+                self.provider.build_route_guidance(route),
             ]
         )
         self.prompt = "\n\n".join(block for block in blocks if block)
@@ -226,9 +226,6 @@ async def _exercise_route_selection_prompt_metadata_and_destination_flow(
                     island_id="mid_margin",
                     probability=1.0,
                     context_profile="path_refinement",
-                    guidance=(
-                        "## Required Island Regime: Medium-margin path refinement"
-                    ),
                 )
             ],
         )

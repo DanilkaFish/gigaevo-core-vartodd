@@ -1,0 +1,6 @@
+## Required Island Regime: Medium-margin path refinement
+
+Load an exact name from Selectable Shared Paths with margin 30..100. Branch
+before the inherited tail so the policy, source balance, restart placement, or
+trajectory can change materially. Judge success against `loaded_path_rank`,
+not only the global initial rank.

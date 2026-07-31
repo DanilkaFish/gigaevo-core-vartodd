@@ -55,6 +55,16 @@ def test_launcher_creates_isolated_overlay_store_and_redis_prefix(
     )
     assert metrics["specs"]["fitness"]["lower_bound"] == 380
     assert metrics["specs"]["fitness"]["upper_bound"] == 421
+    assert (overlay / "prompts").is_symlink()
+    assert (
+        overlay / "prompts" / "islands" / "ab_initio.txt"
+    ).read_text(encoding="utf-8").strip()
+    assert (
+        overlay / "prompts" / "islands" / "mid_margin.txt"
+    ).read_text(encoding="utf-8").strip()
+    assert (
+        overlay / "prompts" / "islands" / "near_end.txt"
+    ).read_text(encoding="utf-8").strip()
     assert (ROOT / "data_gf_islands16" / "path_backups").is_dir()
 
 
@@ -65,4 +75,3 @@ def test_island_launcher_help_documents_fresh_and_resume_runs() -> None:
     assert "fresh Redis" in usage
     assert "redis.resume=true" in usage
     assert "same three-island topology" in usage
-

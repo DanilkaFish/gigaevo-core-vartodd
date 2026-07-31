@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from custom.vartodd_islands_context import (
     IslandEvolutionaryStatisticsCollector,
     PathCardEnrichmentInputs,
@@ -13,6 +15,12 @@ from gigaevo.programs.metrics.context import MetricsContext, MetricSpec
 from gigaevo.programs.program import EXCLUDE_STAGE_RESULTS, Program
 from gigaevo.programs.program_state import ProgramState
 from gigaevo.programs.stages.common import Box
+
+
+def _write_overlay(problem_dir, regime_id: str, text: str) -> None:
+    directory = problem_dir / "prompts" / "islands"
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / f"{regime_id}.txt").write_text(text, encoding="utf-8")
 
 
 def _route(name: str, profile: str) -> MutationRoute:
@@ -154,6 +162,49 @@ def test_provider_filters_context_by_route_and_shares_refinement_cards(
     assert len(near_context) <= 12_000
 
 
+def test_provider_reads_route_overlay_on_each_prompt_build(tmp_path) -> None:
+    _write_overlay(tmp_path, "near_end", "first near-end guidance")
+    provider = VartoddIslandsRouteContextProvider(problem_dir=tmp_path)
+    route = MutationRoute(
+        regime_id="near_end",
+        island_id="near_end",
+        guidance=None,
+    )
+
+    assert provider.build_route_guidance(route) == "first near-end guidance"
+
+    _write_overlay(tmp_path, "near_end", "updated near-end guidance")
+    assert provider.build_route_guidance(route) == "updated near-end guidance"
+
+
+@pytest.mark.parametrize(
+    "regime_id,text,error,match",
+    [
+        ("missing", None, FileNotFoundError, "missing"),
+        ("blank", "   \n", ValueError, "blank"),
+        ("../escape", "unused", ValueError, "unsafe"),
+    ],
+)
+def test_provider_rejects_invalid_route_overlays(
+    tmp_path,
+    regime_id,
+    text,
+    error,
+    match,
+) -> None:
+    if text is not None and regime_id != "../escape":
+        _write_overlay(tmp_path, regime_id, text)
+    provider = VartoddIslandsRouteContextProvider(problem_dir=tmp_path)
+    route = MutationRoute(
+        regime_id=regime_id,
+        island_id="test",
+        guidance=None,
+    )
+
+    with pytest.raises(error, match=match):
+        provider.build_route_guidance(route)
+
+
 async def test_statistics_are_island_local_and_initial_roots_use_ab_initio():
     storage = AsyncMock()
     ab = _program(410.0, "ab_initio")
@@ -220,4 +271,3 @@ def test_enrichment_input_contract_is_optional() -> None:
         runtime=None,
     )
     assert params.metrics is None
-

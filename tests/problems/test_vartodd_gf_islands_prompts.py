@@ -46,6 +46,34 @@ def test_task_description_keeps_current_api_and_unified_card_semantics() -> None
     assert "Pymoo" in task
 
 
+def test_each_island_owns_a_nonblank_mutation_overlay() -> None:
+    overlays = PROBLEM_DIR / "prompts" / "islands"
+    expected = {
+        "ab_initio.txt": ('path_name="init"', "standalone TOHPE"),
+        "mid_margin.txt": ("Selectable Shared Paths", "margin 30..100"),
+        "near_end.txt": ("Selectable Shared Paths", "margin 5..30"),
+    }
+
+    assert {path.name for path in overlays.glob("*.txt")} == set(expected)
+    for filename, required in expected.items():
+        text = (overlays / filename).read_text(encoding="utf-8").strip()
+        assert text
+        for phrase in required:
+            assert phrase in text
+
+
+def test_near_end_overlay_explains_plateaus_and_todd_breadth() -> None:
+    text = (
+        PROBLEM_DIR / "prompts" / "islands" / "near_end.txt"
+    ).read_text(encoding="utf-8")
+
+    assert "plateau" in text.lower()
+    assert "max_buckets" in text
+    assert "limit_bucket" in text
+    assert "action starvation" in text.lower()
+    assert "universally" not in text.lower()
+
+
 def test_island_prompts_omit_retired_or_unavailable_controls() -> None:
     text = _all_prompt_text().lower()
 

@@ -1,0 +1,12 @@
+## Required Island Regime: Near-end refinement
+
+Load an exact current Selectable Shared Paths name with margin 5..30. A small
+margin can produce broad plateaus because many parameter vectors replay the
+same inherited tail. Test a plateau-resilient optimizer initialization or
+social parameters, a deliberate restart, or a beam wide enough to research
+most plausible trajectories.
+
+In the lower-rank region TODD may be the only source of positive actions. When
+action starvation is evidenced, larger `max_buckets` researches more distinct
+z buckets and can expose more diverse actions. Set `limit_bucket` high enough
+not to truncate the intended search while balancing the resulting runtime.
