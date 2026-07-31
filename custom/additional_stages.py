@@ -1062,9 +1062,8 @@ def _frontier_lever(last_group_line: str, flags: str) -> str:
     """Map the hardest group's signal to the lever to move next.
 
     Reads only fields already present in the last group line; returns "" when
-    nothing conclusive. This does not decide the mutation, it names the lever
-    the system prompt says to reach for so the model does not misread a
-    high-z/low-acceptance frontier as a z-budget problem.
+    nothing conclusive. This does not decide the mutation; it explains what
+    the observed generation bottleneck implies for the next experiment.
     """
     # Normalize compact flag abbreviations back to canonical names so this works
     # on both the compact band form and the legacy note= form.
@@ -1083,8 +1082,9 @@ def _frontier_lever(last_group_line: str, flags: str) -> str:
     band = f"{band_m.group(1)}->{band_m.group(2)}" if band_m else "late frontier"
     if "hard_refinement_high_z" in flag_set or "low_acceptance_per_z" in flag_set:
         return (
-            f"{band} is z-saturated (many buckets, few accepts); the lever is "
-            "y coverage / scoring / source-mix, NOT more max_buckets"
+            f"{band} is z-saturated (many buckets, few accepts): positive "
+            "actions are rare, so broader z-bucket research is needed for "
+            "more action discovery and candidate diversity"
         )
     if "tohpe_only" in flag_set and "todd_dominant" not in flag_set:
         return f"{band} ran TOHPE-only; enabling/raising TODD may open new actions"
