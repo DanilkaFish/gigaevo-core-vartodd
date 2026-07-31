@@ -58,21 +58,30 @@ def validate(
     else:
         loaded_rank = 1701.0
 
+    # A candidate must beat the saved path's final rank when it branches from
+    # one; otherwise it must beat the rank from which it began searching.
+    # Persist this separately from fitness so archive retention can never
+    # prefer a non-improving path merely because it falls in the same cell.
+    rank_to_beat_match = loaded_path_match or loaded_match or initial_match
+    rank_improved = float(
+        rank_to_beat_match is not None
+        and found_rank < int(rank_to_beat_match.group(1))
+    )
+
     if np.any(Tensor3D(context) != Tensor3D(Matrix.from_numpy(result))):
         return {"fitness": 1290.0,
                 "is_valid": 0.0,
                 "loaded_rank": loaded_rank,
+                "rank_improved": 0.0,
                 "aux info": full_report,
                 }
 
     base_fitness = result.shape[0] + np.sum(result) / np.size(result)
     penalty = 0.0
-    improved = True
-    rank_to_beat_match = loaded_path_match or loaded_match
+    improved = bool(rank_improved)
     if rank_to_beat_match is not None:
         rank_to_beat = int(rank_to_beat_match.group(1))
-        if found_rank >= rank_to_beat:
-            improved = False
+        if not improved:
             penalty += NO_IMPROVEMENT_PENALTY
 
     child_limit = _child_limit_buckets(full_report)
@@ -93,5 +102,6 @@ def validate(
     return {"fitness": base_fitness + penalty - reward,
             "is_valid": 1.0,
             "loaded_rank": loaded_rank,
+            "rank_improved": rank_improved,
             "aux info": full_report,
             }

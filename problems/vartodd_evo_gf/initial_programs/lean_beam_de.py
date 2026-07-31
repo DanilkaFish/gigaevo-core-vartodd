@@ -9,7 +9,6 @@ from helper import (
     SamplingBudget,
     SourcePool,
     ToddSearch,
-    TohpePrefixSearch,
     TohpeSearch,
     ZBucketSearch,
 )
@@ -42,21 +41,10 @@ class Evaluator(BaseEvaluator):
             )
         )
         samples = SamplingBudget(one_hot="all", sparse=8, dense=self.int_range(8, 40), sparse_max_weight=2)
-        prefix_cap = self.int_range(2000, 24000)
         todd_cap = self.int_range(512, 6000)
         self.set_action_selection(ActionSelection(beamwidth=2, mode="softmax", temperature=0.16))
         self.set_action_pool(ActionPool(final_size=self.int_range(12, 28)))
         self.set_tohpe_search(TohpeSearch(samples, SourcePool(keep=6, reserve=1), z_choices=4))
-        self.set_tohpeprefix_search(
-            TohpePrefixSearch(
-                samples,
-                SourcePool(keep=self.int_range(4, 12), reserve=2),
-                actions_per_bucket=2,
-                buckets=ZBucketSearch(
-                    min_buckets=self.int_range(32, 256), max_buckets=prefix_cap, limit_bucket=prefix_cap
-                ),
-            )
-        )
         self.set_todd_search(
             ToddSearch(
                 SamplingBudget(one_hot=8, sparse=2, dense=0, sparse_max_weight=2),

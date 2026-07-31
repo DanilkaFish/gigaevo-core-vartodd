@@ -120,8 +120,14 @@ become invalid, or exhausted similar local tweaks.
 - If the task uses mapped optimizer parameters, keep the active parameterization
   consistent across phases unless the code explicitly re-extracts or reinitializes
   the active parameter vector.
-- Treat faster runtime as useful only when the task context and metrics show it
-  preserves or improves the relevant quality baseline.
+- Treat productive runtime utilization as an explicit secondary goal after
+  validity and primary quality. When a program finishes far below its budget,
+  consider distinct evaluations, restarts, groups, paths, or optimizer stages
+  supported by the task evidence. Soft-timeout salvage has no direct score;
+  repeated salvage is evidence of imperfect budget fitting.
+- Do not consume runtime by violating the selected source-cost regime. In
+  particular, do not turn a light ab-initio/TOHPE-heavy builder into a
+  heavy-TODD search solely to use more wall time.
 
 ## OUTPUT RULES
 

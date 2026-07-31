@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 from gigaevo.evolution.engine.config import SteadyStateEngineConfig
 from gigaevo.evolution.engine.steady_state import SteadyStateEvolutionEngine
 from gigaevo.evolution.mutation.base import MutationSpec
+from gigaevo.evolution.strategies.base import MutationRoute, MutationSelection
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
 
@@ -312,18 +313,28 @@ class TestSelectParents:
     async def test_returns_parents_from_strategy(self) -> None:
         engine = _make_engine()
         parents = [_prog() for _ in range(3)]
-        engine.strategy.select_elites.return_value = parents
+        selection = MutationSelection(
+            parents=parents,
+            route=MutationRoute(
+                regime_id="mid_margin",
+                island_id="mid_margin",
+                guidance="Reopen with a medium margin.",
+            ),
+        )
+        engine.strategy.select_for_mutation.return_value = selection
 
         result = await engine._select_parents_for_mutation()
 
-        assert result == parents
-        engine.strategy.select_elites.assert_called_once_with(
+        assert result == selection
+        engine.strategy.select_for_mutation.assert_awaited_once_with(
             total=engine.config.parent_selector.num_parents
         )
 
     async def test_records_metrics(self) -> None:
         engine = _make_engine()
-        engine.strategy.select_elites.return_value = [_prog(), _prog()]
+        engine.strategy.select_for_mutation.return_value = MutationSelection(
+            parents=[_prog(), _prog()]
+        )
 
         await engine._select_parents_for_mutation()
 

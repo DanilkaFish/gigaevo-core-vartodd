@@ -1,4 +1,4 @@
-"""Light TODD seed: low-discrepancy scout with local restart refinement."""
+"""Light TODD seed: CMA-ES search with two policy restarts."""
 
 from collections.abc import Iterable
 from helper import (
@@ -11,15 +11,15 @@ from helper import (
     SamplingBudget,
     SourcePool,
     ToddSearch,
-    TohpePrefixSearch,
     TohpeSearch,
     ZBucketSearch,
 )
 import numpy as np
-from scipy.optimize import Bounds, minimize
-from scipy.stats import qmc
+from pymoo.algorithms.soo.nonconvex.cmaes import CMAES
+from pymoo.core.problem import ElementwiseProblem
+from pymoo.optimize import minimize
 
-OPTIMIZER_FAMILY = "scipy_qmc_then_powell"
+OPTIMIZER_FAMILY = "pymoo_cma_es_with_restarts"
 SEEDS = [29, 30]
 SCOUT_POINTS = 160
 REFINE_EVALS = 80
@@ -53,19 +53,9 @@ class Evaluator(BaseEvaluator):
         samples = SamplingBudget(
             one_hot=20, sparse=self.int_range(4, 20), dense=self.int_range(4, 20), sparse_max_weight=3
         )
-        min_buckets = self.int_range(64, 512)
-        bucket_cap = self.int_range(2000, 20000)
         self.set_action_selection(ActionSelection(beamwidth=2, mode="softmax", temperature=0.2))
         self.set_action_pool(ActionPool(final_size=self.int_range(16, 36)))
         self.set_tohpe_search(TohpeSearch(samples, SourcePool(keep=self.int_range(5, 14), reserve=1), z_choices=3))
-        self.set_tohpeprefix_search(
-            TohpePrefixSearch(
-                samples,
-                SourcePool(keep=self.int_range(4, 12), reserve=2),
-                actions_per_bucket=2,
-                buckets=ZBucketSearch(min_buckets=min_buckets, max_buckets=bucket_cap, limit_bucket=bucket_cap),
-            )
-        )
         self.set_todd_search(
             ToddSearch(
                 SamplingBudget(one_hot=12, sparse=4, dense=4, sparse_max_weight=2),
@@ -79,46 +69,34 @@ class Evaluator(BaseEvaluator):
         return objective(self.run(params, SEEDS))
 
 
-def scout_qmc(evaluator: Evaluator, points: int, seed: int) -> np.ndarray:
-    current = evaluator.extract_active()
-    dimensions = len(current)
-    if dimensions == 0:
-        evaluator([])
-        return current
-    sampler = qmc.LatinHypercube(d=dimensions, seed=seed)
-    random_points = sampler.random(max(0, points - 1))
-    candidates = np.vstack(
-        [
-            np.clip(current, LOWER_BOUND, UPPER_BOUND),
-            qmc.scale(random_points, np.full(dimensions, LOWER_BOUND), np.full(dimensions, UPPER_BOUND)),
-        ]
-    )
-    best = candidates[0].copy()
-    best_value = float("inf")
-    for candidate in candidates:
-        value = evaluator(candidate)
-        if value < best_value:
-            best_value = value
-            best = np.asarray(candidate, dtype=float)
-    evaluator.insert(best)
-    evaluator.reinit()
-    return best
+class Problem(ElementwiseProblem):
+    def __init__(self, evaluator: Evaluator):
+        dimensions = len(evaluator.extract_active())
+        super().__init__(
+            n_var=dimensions,
+            n_obj=1,
+            xl=np.full(dimensions, LOWER_BOUND),
+            xu=np.full(dimensions, UPPER_BOUND),
+        )
+        self.evaluator = evaluator
+
+    def _evaluate(self, x, out, *args, **kwargs):
+        out["F"] = self.evaluator(np.asarray(x, dtype=float))
 
 
-def refine_powell(evaluator: Evaluator, evaluations: int) -> np.ndarray:
+def optimize_cma(evaluator: Evaluator, evaluations: int, seed: int, sigma: float) -> np.ndarray:
     current = evaluator.extract_active()
-    dimensions = len(current)
-    if dimensions == 0:
+    if len(current) == 0:
         evaluator([])
         return current
     result = minimize(
-        evaluator,
-        current,
-        method="Powell",
-        bounds=Bounds(np.full(dimensions, LOWER_BOUND), np.full(dimensions, UPPER_BOUND)),
-        options={"maxfev": evaluations, "maxiter": evaluations, "xtol": 0.08, "ftol": 0.0, "disp": False},
+        Problem(evaluator),
+        CMAES(x0=np.clip(current, LOWER_BOUND, UPPER_BOUND), sigma=sigma, pop_size=8, restarts=0),
+        termination=("n_eval", evaluations),
+        seed=seed,
+        verbose=False,
     )
-    best = np.asarray(result.x, dtype=float)
+    best = np.asarray(result.X if result.X is not None else current, dtype=float)
     evaluator.insert(best)
     evaluator.reinit()
     return best
@@ -126,10 +104,10 @@ def refine_powell(evaluator: Evaluator, evaluations: int) -> np.ndarray:
 
 def entrypoint():
     evaluator = Evaluator(path_name="init", max_depth=500)
-    params = scout_qmc(evaluator, SCOUT_POINTS, seed=29)
-    for margin in REOPEN_MARGINS:
+    params = optimize_cma(evaluator, SCOUT_POINTS, seed=29, sigma=0.8)
+    for index, margin in enumerate(REOPEN_MARGINS):
         restarted = evaluator.set_up_new_init(0, rank_thr=evaluator.best_rank + margin, xopt=params)
         if restarted is None:
             break
-        params = refine_powell(evaluator, REFINE_EVALS)
+        params = optimize_cma(evaluator, REFINE_EVALS, seed=30 + index, sigma=0.35)
     return evaluator.get_best()

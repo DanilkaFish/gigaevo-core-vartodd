@@ -181,7 +181,7 @@ Cost model. Approximate stage runtime:
 ```text
 stage_time ~= E * ceil(S / W) * D * B * C_policy
 ```
-- `E`: optimizer evaluations; `S`: seeds; `W`: seed workers (GF32 default 2);
+- `E`: optimizer evaluations; `S`: seeds; `W`: seed workers (GF32 default 1);
 - `D`: reached path depth; `B`: effective beamwidth;
 - `C_policy`: cost of action generation, scoring, pooling, and selection.
 
@@ -418,7 +418,9 @@ improving.
 Selectable Live Path Store sections:
 - `near_tail_paths`: capped paths (`limit_buckets` finite, below the
   near-tail cutoff) not yet proven exhausted by full search — the natural
-  next step is more near-tail refinement, often escalating the cap;
+  next step is more near-tail refinement, often escalating the cap. A child
+  with a low finite cap can remain selectable here even when it did not
+  improve its loaded parent's rank;
 - `wide_margin_paths`: paths that are not near-tail material (already
   full-searched from here, capped above the near-tail cutoff, or reopened
   repeatedly) but not yet reuse-exhausted — candidates for an earlier or

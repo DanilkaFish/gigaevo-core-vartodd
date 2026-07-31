@@ -462,8 +462,12 @@ class PathStore:
         record: dict[str, Any],
         *,
         max_nonimproved_reuse: int,
+        allow_nonimproved_child: bool = False,
     ) -> bool:
-        if record.get("child_improved_loaded") is False:
+        if (
+            record.get("child_improved_loaded") is False
+            and not allow_nonimproved_child
+        ):
             return False
         if record.get("is_stale_improved_child"):
             return False
@@ -632,6 +636,9 @@ class PathStore:
         that have fewer than near_tail_max_full_children children which used a
         full (-1) search — i.e. not yet proven exhausted by an expensive full
         search, so more near-tail refinement is still the natural next step.
+        A low finite-cap child may remain selectable here even when it did not
+        improve its loaded parent's rank: it is cheap branch evidence that can
+        still be reopened with a stronger tail search.
         A full-search child that improves such a path does NOT hide it here
         (that child isn't near-tail material itself); only a better-ranked
         near-tail-qualifying child replaces it.
@@ -696,8 +703,22 @@ class PathStore:
                 max_full_children=near_tail_max_full_children,
             )
 
+        # Near-tail is deliberately more permissive than the global live set:
+        # retain cheap finite-cap children even when they failed to improve
+        # their loaded parent. Full/unknown/high-cap non-improvers still fail
+        # near_tail_ok and therefore remain evidence-only.
+        near_tail_live_records_raw = [
+            r
+            for r in records
+            if near_tail_ok(r)
+            and self._is_live_record(
+                r,
+                max_nonimproved_reuse=max_nonimproved_reuse,
+                allow_nonimproved_child=True,
+            )
+        ]
         near_tail_source, _ = self._promote_children_over_parents(
-            live_records_raw,
+            near_tail_live_records_raw,
             child_qualifies=near_tail_ok,
         )
         near_tail_records = self._select_top(
@@ -724,6 +745,14 @@ class PathStore:
 
         near_tail_lines = [self._format_summary_record(r) for r in near_tail_records]
         wide_margin_lines = [self._format_summary_record(r) for r in wide_margin_records]
+        selectable_nonimproved_count = sum(
+            1
+            for record in near_tail_records
+            if record.get("child_improved_loaded") is False
+        )
+        hidden_nonimproved_child_count = max(
+            0, nonimproved_child_count - selectable_nonimproved_count
+        )
 
         dead_end_records = [
             r
@@ -770,6 +799,8 @@ class PathStore:
         )
         lines += [
             "rule=load_only_names_under_best_paths.near_tail_paths,wide_margin_paths; "
+            "low finite-cap nonimproved children may be selectable under "
+            "near_tail_paths; "
             "wide_margin_paths are the best remaining paths not chosen in "
             "near_tail_paths, with no better child and own used_count<"
             f"{int(wide_margin_max_used)}; dead_end_paths and "
@@ -790,10 +821,14 @@ class PathStore:
                 "promoted(child replaces parent, shares prefix): "
                 + ", ".join(f"{parent}->{child}" for parent, child in promoted_pairs)
             )
-        if nonimproved_child_count or stale_improved_child_count or over_failed_reuse_count:
+        if (
+            hidden_nonimproved_child_count
+            or stale_improved_child_count
+            or over_failed_reuse_count
+        ):
             lines.append(
                 "hidden(not selectable): "
-                f"nonimproved_child={nonimproved_child_count}, "
+                f"nonimproved_child={hidden_nonimproved_child_count}, "
                 f"stale_improved_child={stale_improved_child_count}, "
                 f"over_failed_reuse={over_failed_reuse_count}"
             )

@@ -225,6 +225,10 @@ An old single-island Redis archive is not automatically converted. The first
 three-island run must use a fresh namespace/database, or an explicit archive
 rebuild performed separately.
 
+The launcher keeps `data_gf<matrix>` shared across all three islands. After a
+namespace has been created with the stable three-island topology, later runs
+may use `redis.resume=true` with that same topology.
+
 ## Observability
 
 Expose and log:

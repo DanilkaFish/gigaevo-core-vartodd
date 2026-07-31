@@ -43,7 +43,7 @@ def ActionSelection(
 
 MIN_SAVED_PATH_MARGIN = 1
 DEFAULT_MATRIX_PATH = "npy/gf2^32_3228310.npy"
-DEFAULT_MATRIX_PATH = "npy/gf2^16_1612310.npy"
+# DEFAULT_MATRIX_PATH = "npy/gf2^16_1612310.npy"
 EXECUTOR_KIND = os.getenv("EVO_SEED_EXECUTOR_KIND", "thread")
 PROGRAM_ID: Optional[str] = os.getenv("GIGAEVO_PROGRAM_ID")
 ACTIVE_EVALUATOR: Optional["BaseEvaluator"] = None

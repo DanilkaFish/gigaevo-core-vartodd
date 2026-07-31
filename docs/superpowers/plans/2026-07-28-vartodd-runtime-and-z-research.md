@@ -2,9 +2,15 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make valid programs prefer productive runtime use, strongly penalize loaded-path non-improvement except for cheaper observed z-research experiments, and expose configured and observed z search separately in saved-path names.
+**Goal:** Make valid programs prefer productive runtime use, expose full-TODD
+configured and observed z search separately, and sample one selectable live
+path per final rank.
 
-**Architecture:** The shared `vartodd_evo_gf` problem remains the source of truth. `BaseEvaluator` derives observed z-research from the selected best path and writes it beside the configured TODD cap in the path name; validation compares child and parent name metadata. Metrics and prompts then express runtime and TODD trade-offs without prescribing a specific mechanism.
+**Architecture:** The shared `vartodd_evo_gf` problem remains the source of
+truth. Native policy stats expose TOHPEprefix and TODD z research separately;
+`BaseEvaluator` writes only TODD research and the TODD cap in the path name.
+The Live Path Store groups candidates by final rank, samples one representative
+per rank, then emits distinct ranks across both selectable sections.
 
 **Tech Stack:** Python, pytest, YAML/Hydra configuration, existing VarTODD `Path`, `PathStore`, and validation APIs.
 
@@ -13,9 +19,10 @@
 - Work only on `public-vartodd`.
 - Preserve unrelated dirty-worktree changes.
 - Do not score `timeout_salvaged=1`.
-- Non-improving loaded searches receive `+7`, or `+1` only when their maximum observed z-research is strictly smaller than the parent's.
-- Compare observed z-research, never configured cap, for the reduced penalty.
-- New path names are `f<final>_i<loaded>_<hash>_lim<cap>_z<max>`.
+- Non-improving loaded searches receive `+7`, or `+1` only when final rank is
+  equal and the configured TODD cap is strictly smaller than the parent's.
+- New path names are
+  `f<final>_i<loaded>_<hash>_z<max_todd_observed>of<max_todd_limit>`.
 - Legacy paths remain readable but cannot establish the reduced penalty.
 
 ---
@@ -28,15 +35,16 @@
 - Modify: `problems/vartodd_evo_gf/path_store.py`
 
 **Interfaces:**
-- Produces: `BaseEvaluator._path_max_z_researched(path) -> int | None`
-- Produces path suffix: `_lim<cap>_z<max|unknown>`
-- Stores optional `max_z_researched` in each path metadata record.
+- Produces: `BaseEvaluator._path_max_todd_z_researched(path) -> int | None`
+- Produces path suffix: `_z<max|unknown>of<limit|unknown>`
+- Stores optional `max_todd_z_researched` in each path metadata record.
 
 - [ ] **Step 1: Write failing path-name tests**
 
-Add a fake selected path whose node chain has `incoming.total` values `64`,
-`512`, and `128`. Assert `_auto_hashed_name(...)` ends in
-`_lim1024_z512`, and assert missing incoming statistics produce `_zunknown`.
+Add a fake selected path whose node stats have `z_researched_todd` values
+`64`, `512`, and `128`, while aggregate/prefix values are much larger. Assert
+`_auto_hashed_name(...)` ends in `_z512of1024`, and assert missing
+source-specific statistics produce `_zunknownof1024`.
 Also assert `_loaded_path_todd_limit` still reads the cap from the extended
 name and Live Path Store parses both legacy and extended names.
 
@@ -52,10 +60,26 @@ Expected: failures because names currently end after `_lim<cap>`.
 
 - [ ] **Step 3: Implement selected-path observed research**
 
-Walk `path.final_node.parent` links and collect `node.incoming.total` only when
-the attribute exists. Return the maximum integer or `None`. Append the value to
-both program-ID and hash-based names. Save it as optional path metadata and
-extend the short-name regex without making `_z` mandatory.
+Walk `path.final_node.parent` links and collect only
+`node.incoming.global_info.z_researched_todd`. Return the maximum integer or
+`None`; never substitute aggregate research. Append it to both name branches,
+save source-specific metadata, and parse both current and legacy formats.
+
+### Task 1B: Distinct-Rank Live Path Sampling
+
+**Files:**
+- Modify: `tests/problems/test_vartodd_gf_path_names.py`
+- Modify: `problems/vartodd_evo_gf/path_store.py`
+
+- [ ] **Step 1: Write failing tests**
+
+Assert `_select_top` samples one member from tied ranks and that a summary
+never repeats a final rank across near-tail and wide-margin sections.
+
+- [ ] **Step 2: Implement rank-group sampling**
+
+Group eligible records by `rank`, use `random.choice` once per group, sort the
+representatives, and exclude ranks selected by near-tail from wide-margin.
 
 - [ ] **Step 4: Run the focused tests and verify GREEN**
 
@@ -74,10 +98,9 @@ Expected: all tests pass.
 - Modify: `problems/vartodd_evo_gf/validate.py`
 
 **Interfaces:**
-- Produces: `_loaded_path_max_z_researched(text: str) -> int | None`
-- Produces: `_child_max_z_researched(text: str) -> int | None`
+- Produces: `_child_path_todd_limit(text: str) -> int | None`
 - Constants: `NO_IMPROVEMENT_PENALTY = 7.0`,
-  `REDUCED_Z_RESEARCH_PENALTY = 1.0`.
+  `REDUCED_CAP_PENALTY = 1.0`.
 
 - [ ] **Step 1: Write failing validation tests**
 
@@ -85,16 +108,16 @@ Use a valid matrix result and reports containing loaded and child path names.
 Assert:
 
 ```text
-parent z512, child z511, no improvement -> base + 1
-parent z512, child z512, no improvement -> base + 7
-parent z512, child z1024, no improvement -> base + 7
-legacy/missing parent or child z -> base + 7
+equal rank, parent lim512, child lim511 -> base + 1
+equal rank, equal/larger/unrestricted child cap -> base + 7
+worse rank with smaller cap -> base + 7
+missing parent or child cap -> base + 7
 improved child -> base
 timeout_salvaged=1 -> no additional change
 ```
 
-Vary `_lim` independently in at least one case to prove cap does not control
-the exception.
+Vary `_z` independently in at least one case to prove observed research does
+not control the exception.
 
 - [ ] **Step 2: Run the validation tests and verify RED**
 
@@ -108,10 +131,10 @@ Expected: failures showing the existing `+1` behavior and missing z parsers.
 
 - [ ] **Step 3: Implement the minimal scoring rules**
 
-Parse parent observed z only from `loaded_path_name:` and child observed z only
-from `this path name:`. For a loaded, non-improving result, select `+1` only
-when both values exist and `child_z < parent_z`; otherwise select `+7`.
-Delete unused low-limit and over-limit shaping logic. Do not inspect or score
+Parse parent cap only from `loaded_path_name:` and child cap only from
+`this path name:`. For a loaded, non-improving result, select `+1` only when
+the final rank is exactly equal and the child cap is strictly smaller;
+otherwise select `+7`. Delete unused shaping logic. Do not inspect or score
 `timeout_salvaged`.
 
 - [ ] **Step 4: Run the validation tests and verify GREEN**

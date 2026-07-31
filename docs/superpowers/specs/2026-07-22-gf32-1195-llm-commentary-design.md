@@ -1,133 +1,99 @@
-# GF(2^32) 1195-T LLM Commentary Design
+# GF(2^32) 1195-T Appendix Commentary Design
 
 ## Goal
 
-Lightly polish the comments around the generation-6 program in
-`appendix/gf32_evolution_appendix_section.tex`. Make them easier to read and
-align their explanations with the program insights and evidence used to form
-the successful mutation. Preserve the appendix's organization, condensed
-pseudocode, comment style, and explanation order.
-
-The appendix remains an explanation of the evolved program, not an analysis
-of the model's reasoning. It does not reproduce or cite the prompt, reasoning
-trace, completion, or raw insight labels.
+Revise `appendix/gf32_evolution_appendix_section.tex` so its terminology
+matches the main manuscript and its evolved-program listing is easy to read.
+Keep only short comments that connect an observed search behavior to a program
+choice and, where the stored run supports it, to the resulting improvement.
 
 ## Source of truth
 
-The relevant OpenRouter generation is
-`gen-1784459807-5caO3v2YHwmbdadrLyWG`. Its request began at
-2026-07-19 11:16:47.867 and completed at 11:18:21.179; program `4fb701ef`
-was created at 11:18:21.894. The immediately following generation produced
-the separate margin-200 program and must not be used for this commentary.
+Use the terminology and conceptual hierarchy in
+`appendix/main_submission_prxquantum_section2B_ftqc_revised(1).tex` and
+`appendix/vartodd_appendix_prxquantum.tex`. Use the winner's stored program,
+trajectory, lineage, and evaluation record only to check factual claims.
 
-The attached system prompt, attached reasoning, stored structured mutation
-output, winner's code, and evaluation record are verification sources only.
-They agree on the selected path and material parameter changes. The appendix
-will summarize the resulting technical explanations in ordinary reader-facing
-language.
+The appendix must explain the evolved tuner, not reproduce or analyze the
+LLM's prompt, completion, or hidden reasoning. Its annotations may summarize
+the useful observations reflected in those sources without presenting them as
+quotations or individually proven causes.
 
-## Editorial approach
+## Terminology
 
-Keep the current comment blocks and their order. Replace dense metadata and
-quasi-quotation with short explanations placed beside the setting they
-describe. Each block should answer at most three questions:
+Use the manuscript's reader-facing terms:
 
-1. what changed or was retained;
-2. which observed search problem made that choice relevant; and
-3. what the winning run subsequently did, when useful.
+- current \(T\)-count or parity-matrix column count, rather than rank;
+- saved trajectory and restart point, rather than saved path and branch point;
+- numerical policy search or particle-swarm optimization, rather than refiner;
+- candidate actions, TOHPE-style source, and TODD/FastTODD source;
+- admissible-vector sampling and admissible space;
+- source retention, final action pool, score power, and beam width;
+- high-\(T\)-count and terminal regimes, rather than early, tail, or mid-band.
 
-Do not use phrases such as `the LLM selected` or `the model inferred` to
-narrate the reasoning process. Do not include raw insight identifiers such as
-`excessive_eval_budget_given_no_improvement`. The relationship to the LLM is
-shown by making the comments follow the same evidence-based explanations, not
-by narrating its internal process.
+The actual `PATH_NAME` identifier remains because it is part of the condensed
+API. Rename the display-only schedule constants to `HIGH_TCOUNT` and
+`TERMINAL_TCOUNT` and update their use in `set_todd_search`.
 
-## Comment revisions
+## Comment structure
 
-### Program summary
+Use sparse causal annotations rather than preserving a comment for every
+component. Keep at most five compact blocks, in the program's existing order:
 
-Replace the quoted mutation rationale and the raw list of diagnosed signals
-with a compact overview: the mutation reopened a lightly reused rank-1197 path
-near its top, retained capped-early/full-tail TODD, changed scoring and
-mid-band sampling, and reduced the PSO evaluation budget.
+1. **Saved trajectory and restart point.** The selected trajectory had reached
+   \(T\)-count 1197 and was reopened at \(T\)-count 1248, leaving room for a
+   different descent.
+2. **Numerical policy search and seeds.** The parent had stopped improving, so
+   the PSO population and evaluation budget were reduced. Tuning uses one seed;
+   the selected policy is then rerun with three seeds to reduce dependence on
+   that tuning seed and retain the best resulting trajectory.
+3. **Scoring and admissible-vector sampling.** Quadratic score power increases
+   candidate-score separation. Capped one-hot sampling plus sparse and dense
+   samples adds coverage mainly when the admissible space is larger.
+4. **Candidate sources and \(T\)-count schedule.** Retain both sources, use a
+   finite TODD/FastTODD search in the high-\(T\)-count regime, and reserve the
+   unrestricted search for the terminal regime.
+5. **Observed outcome.** The combined program improved the saved trajectory
+   from 1197 to 1195. Do not attribute the improvement to one setting alone.
 
-### Saved path and branch point
+Short descriptive inline comments may identify a source or an unchanged
+setting, but they must not restore the removed diagnostic narrative.
 
-Explain that `i1701_m1244_f1197_fc0b0d69` was one of the best available paths
-and had been reused only once, while the alternative rank-1197 path had already
-failed three reuses. `margin=50` produced `init_rank_thr=1247` and an observed
-loaded rank of 1248, providing a broad branch above the difficult tail.
+## `FINAL_SEEDS` evidence
 
-### Optimizer budget
+`FINAL_SEEDS = [29, 87, 43]` reruns the selected policy under three stochastic
+seeds after the one-seed numerical policy search. The evaluator retains the
+best trajectory across these runs, so this is a best-of-three final search as
+well as a check against dependence on one tuning seed; it is not an independent
+algebraic correctness validation.
 
-The direct parent last improved at evaluation 14 of 188 and encountered its
-best rank 18 times without beating the loaded path. Connect that saturation to
-the smaller `PSO_POP=10` and `N_EVAL=80`. Describe this only as reduced
-optimizer evaluation work; do not discuss or claim end-to-end wall time.
+The complete evolved program improved the saved trajectory from \(T\)-count
+1197 to 1195. The stored diagnostics do not identify the final per-seed results
+or isolate the contribution of reseeding from the other simultaneous changes.
+The appendix may therefore say the final rerun served its intended purpose,
+but it must not claim that `FINAL_SEEDS` alone caused or independently proved
+the 1195 result.
 
-### Scoring
+## Material to remove
 
-Explain `pow=2` as a change intended to separate candidate scores more clearly
-when few useful terminal actions survive. Keep the existing caution that the
-successful run changed several mechanisms together and does not isolate the
-effect of score power alone.
+Remove detailed generation chronology, reuse counts, raw path diagnostics,
+H/T ratios, `apz`, z-saturation descriptions, timeout-salvage details, and
+internal labels such as tail or mid-band. Remove the incorrect suggestion that
+one-hot 8 exhausts every admissible space of dimension four. Do not include
+prompt excerpts, model narration, insight identifiers, or precise LLM
+reasoning.
 
-### Tree-search width
+## Scope and verification
 
-Keep beam-2 softmax at temperature 0.20. Explain it as the retained compromise
-between greedy width 1 and a wider, more expensive tree. The terminal action
-pool was underfilled and acceptance was very low, so the evidence did not
-support widening beyond 2.
+Revise terminology in the whole section, while preserving the two programs,
+their parameter values, captions, labels, and explanatory order. Verify that:
 
-### Sampling
-
-Explain that one-hot 8 still covers all nonzero y vectors when terminal
-dimension is at most 3, while sparse weight-3 and dense 3--7 sampling add
-coverage mainly in earlier bands where the dimension is larger. Avoid claiming
-that these larger budgets create additional terminal candidates once the
-small nullspace is saturated.
-
-### Candidate sources and TODD schedule
-
-Keep the existing explanation that both TOHPE and TODD contributed accepted
-actions. Clarify that the selected rank-1197 path had already depended on full
-terminal search, so the mutation retained a finite early cap and full TODD
-below rank 1225. Connect reserve 4-to-2 to the very low terminal acceptance and
-underfilled pool: the smaller reserve lets TODD stop earlier instead of
-continuing z research merely to fill a larger retained quota.
-
-### Observed descent
-
-Retain the compact measured sequence: the reopened path began at rank 1248,
-reached 1201 at evaluation 2, 1199 at evaluation 18, and 1195 at evaluation
-38; 68 evaluations completed before timeout salvage. Present this as the
-result of the combined program rather than proof that one setting was solely
-responsible.
-
-## Scope of the edit
-
-Only listing comments related to the best evolved program are revised. Program
-constants, pseudocode operations, surrounding prose, captions, labels, section
-structure, the initial-program listing, and the underlying 1195-T factual trace
-remain unchanged.
-
-Remove the quasi-quotation, raw insight-name list, and the statement contrasting
-the smaller optimizer budget with unchanged total runtime. Do not add a prompt
-analysis, reasoning transcript, OpenRouter identifier, or the incorrect
-margin-200 mutation to the appendix.
-
-## Verification
-
-After editing:
-
-- compare every summarized explanation with the attached reasoning, stored
-  insights, program comments, and structured mutation output;
-- confirm the listing still uses path `fc0b0d69`, margin 50, PSO 10/80,
-  beamwidth 2, score power 2, one-hot 8, sparse 4/weight 3, TODD reserve 2,
-  and the 30937/full rank schedule;
-- search for stale margin-200 text, raw insight identifiers, direct prompt or
-  reasoning quotations, and the removed wall-time contrast;
-- check listing environments, braces, labels, and TeX syntax structurally;
-  compile the containing document if a build target is available; and
-- inspect the final diff to ensure that no unrelated files or pseudocode were
-  changed.
+- all reader-facing terms match the manuscript;
+- the evolved listing still uses trajectory `fc0b0d69`, margin 50, PSO 10/80,
+  beam width 2, score power 2, one-hot 8, sparse 4/weight 3, retention reserve
+  2, and the 30937/unrestricted TODD schedule;
+- no removed diagnostic language remains;
+- listing environments, braces, and cross-references are structurally valid;
+- the containing TeX document compiles if a local TeX engine is available;
+  and
+- the final diff contains no unrelated edits.

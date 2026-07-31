@@ -48,8 +48,10 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
         # Keyed by mutant id (the in-flight registration key).
         self._inflight_tickets: dict[str, ParentRefreshTicket] = {}
         # Two-sema model: producer pool caps concurrent (refresh + LLM); buffer
-        # pool caps produced-but-not-yet-ingested mutants. Both sized from the
-        # single ``max_in_flight`` knob; steady-state pipeline depth ~2 × N.
+        # pool caps mutant lifecycle slots. Both use ``max_in_flight``.
+        # Non-strict mode acquires buffer capacity after generation and permits
+        # pipeline depth ~2 × N. Strict mode acquires it before producer work,
+        # bounding producing plus registered mutants to N.
         # See docs/superpowers/specs/2026-05-13-mutation-throughput-two-sema-design.md.
         self._producer_sema = asyncio.Semaphore(self._ss_config.max_in_flight)
         self._buffer_sema = asyncio.Semaphore(self._ss_config.max_in_flight)
@@ -73,10 +75,11 @@ class SteadyStateEvolutionEngine(EvolutionEngine):
     async def run(self) -> None:
         logger.info(
             "[SteadyState] Start | producer_sema={} buffer_sema={} "
-            "(max_in_flight={}) stopper={}",
+            "(max_in_flight={}) strict_in_flight={} stopper={}",
             self._ss_config.max_in_flight,
             self._ss_config.max_in_flight,
             self._ss_config.max_in_flight,
+            self._ss_config.strict_in_flight,
             type(self._ss_config.stopper).__name__,
         )
         self._running = True

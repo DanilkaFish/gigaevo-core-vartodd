@@ -2,47 +2,27 @@ from __future__ import annotations
 
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
-TASK_DESCRIPTION = REPO_ROOT / "problems" / "vartodd_evo_gf" / "task_description.txt"
-INSIGHTS_SYSTEM = (
-    REPO_ROOT / "problems" / "vartodd_evo_gf" / "prompts" / "insights" / "system.txt"
-)
 MUTATION_SYSTEM = (
     REPO_ROOT / "problems" / "vartodd_evo_gf" / "prompts" / "mutation" / "system.txt"
 )
 UPDATED_ALGORITHM = (
     REPO_ROOT / "config" / "algorithm" / "vartodd_diverse_gf16_tohpe_updated.yaml"
 )
+TASK_DESCRIPTION = (
+    REPO_ROOT / "problems" / "vartodd_evo_gf" / "task_description.txt"
+)
 
 
-def test_regime_guidance_supports_capped_to_full_escalation() -> None:
+def test_regime_guidance_is_owned_by_three_parent_islands() -> None:
     text = UPDATED_ALGORITHM.read_text(encoding="utf-8")
 
-    assert "no more than 10_000" not in text
-    assert "nom more than 10_000" not in text
-    assert "limit_bucket=-1" in text
-    assert "min_buckets" in text
-    assert "max_buckets" in text
-    assert "limit_bucket" in text
-
-
-def test_task_context_separates_y_per_bucket_from_z_coverage() -> None:
-    text = TASK_DESCRIPTION.read_text(encoding="utf-8")
-
-    assert "for one researched z bucket" in text
-    assert "does not bound how many z buckets" in text
-    assert "Low `dim` alone" in text
-
-
-def test_prompts_prioritize_scores_without_hiding_generation_failure() -> None:
-    combined = (
-        TASK_DESCRIPTION.read_text(encoding="utf-8")
-        + INSIGHTS_SYSTEM.read_text(encoding="utf-8")
-    )
-
-    assert "most influential mapped policy parameters" in combined
-    assert "cannot select an action that was never generated" in combined
+    assert "regime_id: ab_initio" in text
+    assert "regime_id: mid_margin" in text
+    assert "regime_id: near_end" in text
+    assert "enable_migration: false" in text
+    assert "mutation_regime_guidance: []" in text
+    assert "shared Live Path Store" in text
 
 
 def test_mutation_prompt_requires_one_primary_causal_experiment() -> None:
@@ -53,55 +33,41 @@ def test_mutation_prompt_requires_one_primary_causal_experiment() -> None:
     assert "optimizer-specific evidence" in text
 
 
-def test_task_context_describes_evidence_without_prescribing_response() -> None:
+def test_near_tail_regime_has_concrete_small_margin_plateau_escapes() -> None:
+    text = UPDATED_ALGORITHM.read_text(encoding="utf-8")
+    near_tail = text.split("regime_id: near_end", maxsplit=1)[1]
+
+    assert "small margin" in near_tail.lower()
+    assert "plateau" in near_tail.lower()
+    assert "optimizer settings" in near_tail
+    assert "broad beam search" in near_tail
+    assert "TODD" in near_tail
+    assert "rare and diverse actions" in near_tail
+    assert "cognitive/social" not in near_tail
+    assert "beamwidth 10..smth_big" not in near_tail
+
+
+def test_shared_description_mentions_small_margin_plateaus_neutrally() -> None:
     text = TASK_DESCRIPTION.read_text(encoding="utf-8")
 
-    for biased in (
-        "appropriate only around a productive basin",
-        "They are poor default scouts",
-        "use global exploration, then refine",
-        "another optimizer cannot repair",
-        "supports changing the mechanism",
-        "Do not call a second identical stage a restart",
-        "Typical rank regimes:",
-        "Cheap sources often",
-        "useful changes can target",
-    ):
-        assert biased not in text
-
-    for neutral in (
-        "do not uniquely identify their cause",
-        "program-defined labels",
-        "Passing `xopt` preserves",
-        "relative positions in the reached trajectory",
-        "do not imply fixed properties",
-    ):
-        assert neutral in text
+    assert "Small margins can also create broad optimization plateaus" in text
+    assert "prefers the path with the highest initial rank" in text
 
 
-def test_task_context_clarifies_groups_and_schedule_setters() -> None:
+def test_shared_description_does_not_explain_fitness_penalties() -> None:
     text = TASK_DESCRIPTION.read_text(encoding="utf-8")
-    prose = " ".join(text.split())
 
-    assert "Every `map_par` call must pass `group=` explicitly" in prose
-    assert "must already have been declared" in prose
-    assert "complete parameter layout must remain identical" in prose
-    assert "constructors describe one configuration" in prose
-    assert (
-        "Never mix a positional configuration with `ranks=` or `values=`"
-        in prose
-    )
-    assert "ActionPool(ranks=" in text
-    assert "set_action_pool(early_pool, ranks=" in text
-    assert text.count("### Rank schedules") == 1
+    assert "Fitness shaping on top of rank" not in text
+    assert "penalized" not in text
+    assert "reward (up to" not in text
 
 
-def test_task_context_explains_runtime_budget_utilization() -> None:
+def test_shared_description_defines_z_saturation_as_research_starvation() -> None:
     text = TASK_DESCRIPTION.read_text(encoding="utf-8")
-    prose = " ".join(text.split())
+    compact = " ".join(text.split())
+    compact_lower = compact.lower()
 
-    assert "equal to `vartodd_call_timeout`" in prose
-    assert "objective calls × seeds × policy cost" in prose
-    assert "remaining time can support more distinct parameter evaluations" in prose
-    assert "Running into the soft timeout is safe" in prose
-    assert "were not fitted cleanly within the available runtime" in prose
+    assert "positive actions are rare" in compact_lower
+    assert "finding more requires a broader z-bucket research budget" in compact_lower
+    assert "increase `max_buckets`" in compact_lower
+    assert "increase `limit_bucket`" in compact_lower

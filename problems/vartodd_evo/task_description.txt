@@ -395,7 +395,9 @@ improving.
 Selectable Live Path Store sections:
 - `near_tail_paths`: capped paths (`limit_buckets` finite, below the
   near-tail cutoff) not yet proven exhausted by full search — the natural
-  next step is more near-tail refinement, often escalating the cap;
+  next step is more near-tail refinement, often escalating the cap. A child
+  with a low finite cap can remain selectable here even when it did not
+  improve its loaded parent's rank;
 - `wide_margin_paths`: paths that are not near-tail material (already
   full-searched from here, capped above the near-tail cutoff, or reopened
   repeatedly) but not yet reuse-exhausted — candidates for an earlier or
@@ -542,4 +544,4 @@ Guardrails for vetting Program Insights and mutation context:
   from near-final saved-path tails.
 - Score-center claims should respect normalized `[0, 1]` features and the
   rendered `w[...]`/`c[...]` split.
-- Cheap runtime is strong harmful evidence.
+- Cheap runtime is strong harmful evidence. The runtime should be above 2000s

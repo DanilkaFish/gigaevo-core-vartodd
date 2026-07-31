@@ -1,4 +1,4 @@
-"""Heavy TODD seed: rank-scheduled policy optimized by bounded NGOpt stages."""
+"""Heavy-tail schedule explored by explicit DE, then refined by PSO."""
 
 from collections.abc import Iterable
 from helper import (
@@ -13,35 +13,49 @@ from helper import (
     SourcePool,
     TARGET_FINAL_RANK,
     ToddSearch,
-    TohpePrefixSearch,
     TohpeSearch,
     ZBucketSearch,
 )
-import nevergrad as ng
 import numpy as np
+from pymoo.algorithms.soo.nonconvex.de import DE
+from pymoo.algorithms.soo.nonconvex.pso import PSO
+from pymoo.core.problem import ElementwiseProblem
+from pymoo.optimize import minimize
 
-OPTIMIZER_FAMILY = "nevergrad_ngopt_with_restart"
+OPTIMIZER_FAMILY = "pymoo_de_then_pso_with_restart"
 SWITCH_RANK = TARGET_FINAL_RANK + 55
 SCHEDULE = [INITIAL_RANK, SWITCH_RANK]
 SEEDS = [23, 24]
-FIRST_STAGE_BUDGET = 64
-RESTART_BUDGET = 48
+FIRST_STAGE_EVALS = 128
+RESTART_EVALS = 96
 REOPEN_MARGIN = 55
 TODD_ROLE = "heavy_tail_schedule"
 LOWER_BOUND = -2.0
 UPPER_BOUND = 2.0
 EARLY_TODD_LIMIT = 512
-TERMINAL_PREFIX_LIMIT = 24000
 
 
 class Evaluator(BaseEvaluator):
     """Use finite TODD early and full z coverage only near the target."""
 
-    def float_range(self, low: float, high: float) -> float:
-        return self.map_par(lambda x: low + (high - low) * (0.5 + 0.5 * np.tanh(float(x) / 2.2)))
+    def float_range(self, low: float, high: float, *, group: str = "scores") -> float:
+        return self.map_par(
+            lambda x: low + (high - low) * (0.5 + 0.5 * np.tanh(float(x) / 2.2)),
+            group=group,
+        )
 
-    def int_range(self, low: int, high: int) -> int:
-        return self.map_par(lambda x: min(high, low + int((high - low + 1) * (0.5 + 0.5 * np.tanh(float(x) / 2.2)))))
+    def int_range(self, low: int, high: int, *, group: str = "policy") -> int:
+        return self.map_par(
+            lambda x: min(
+                high,
+                low
+                + int(
+                    (high - low + 1)
+                    * (0.5 + 0.5 * np.tanh(float(x) / 2.2))
+                ),
+            ),
+            group=group,
+        )
 
     def policy_mapping(self):
         self.set_scores(
@@ -89,21 +103,6 @@ class Evaluator(BaseEvaluator):
                 ),
             ],
         )
-        light_prefix = TohpePrefixSearch(
-            SamplingBudget(one_hot=8, sparse=2, dense=0, sparse_max_weight=2),
-            SourcePool(keep=2, reserve=0),
-            actions_per_bucket=2,
-            buckets=ZBucketSearch(min_buckets=8, max_buckets=128, limit_bucket=512),
-        )
-        heavy_prefix = TohpePrefixSearch(
-            tail_samples,
-            SourcePool(keep=tail_keep, reserve=2),
-            actions_per_bucket=terminal_actions_per_bucket,
-            buckets=ZBucketSearch(
-                min_buckets=terminal_min_buckets, max_buckets=TERMINAL_PREFIX_LIMIT, limit_bucket=TERMINAL_PREFIX_LIMIT
-            ),
-        )
-        self.set_tohpeprefix_search(SCHEDULE, [light_prefix, heavy_prefix])
         self.set_todd_search(
             SCHEDULE,
             [
@@ -127,25 +126,35 @@ class Evaluator(BaseEvaluator):
         return float(values.min() + 0.015 * values.std())
 
 
-def optimize_ngopt(evaluator: Evaluator, budget: int, seed: int) -> np.ndarray:
-    current = evaluator.extract_active()
-    dimensions = len(current)
-    if dimensions == 0:
-        evaluator([])
-        return current
-    parametrization = ng.p.Array(init=current).set_bounds(LOWER_BOUND, UPPER_BOUND)
-    optimizer = ng.optimizers.NGOpt(parametrization=parametrization, budget=budget, num_workers=1)
-    optimizer.parametrization.random_state.seed(seed)
-    best = current.copy()
-    best_value = float("inf")
-    for _ in range(budget):
-        candidate = optimizer.ask()
-        vector = np.asarray(candidate.value, dtype=float)
-        value = evaluator(vector)
-        optimizer.tell(candidate, value)
-        if value < best_value:
-            best_value = value
-            best = vector.copy()
+class Problem(ElementwiseProblem):
+    def __init__(self, evaluator: Evaluator):
+        active = evaluator.extract_active()
+        super().__init__(
+            n_var=len(active),
+            n_obj=1,
+            xl=np.full(len(active), LOWER_BOUND),
+            xu=np.full(len(active), UPPER_BOUND),
+        )
+        self.evaluator = evaluator
+
+    def _evaluate(self, x, out, *args, **kwargs):
+        out["F"] = self.evaluator(np.asarray(x, dtype=float))
+
+
+def optimize(
+    evaluator: Evaluator, algorithm, evaluations: int, seed: int
+) -> np.ndarray:
+    result = minimize(
+        Problem(evaluator),
+        algorithm,
+        termination=("n_eval", evaluations),
+        seed=seed,
+        verbose=False,
+    )
+    best = np.asarray(
+        result.X if result.X is not None else evaluator.extract_active(),
+        dtype=float,
+    )
     evaluator.insert(best)
     evaluator.reinit()
     return best
@@ -153,8 +162,20 @@ def optimize_ngopt(evaluator: Evaluator, budget: int, seed: int) -> np.ndarray:
 
 def entrypoint():
     evaluator = Evaluator(path_name="init", max_depth=500)
-    params = optimize_ngopt(evaluator, FIRST_STAGE_BUDGET, seed=23)
-    restarted = evaluator.set_up_new_init(0, rank_thr=evaluator.best_rank + REOPEN_MARGIN, xopt=params)
+    params = optimize(
+        evaluator,
+        DE(pop_size=16, variant="DE/rand/1/bin", CR=0.9, F=0.6),
+        FIRST_STAGE_EVALS,
+        seed=23,
+    )
+    restarted = evaluator.set_up_new_init(
+        0, rank_thr=evaluator.best_rank + REOPEN_MARGIN, xopt=params
+    )
     if restarted is not None:
-        optimize_ngopt(evaluator, RESTART_BUDGET, seed=27)
+        optimize(
+            evaluator,
+            PSO(pop_size=16, w=0.8, c1=0.55, c2=0.55, adaptive=True),
+            RESTART_EVALS,
+            seed=27,
+        )
     return evaluator.get_best()

@@ -105,7 +105,7 @@ islands:
     max_size: ${island_max_size}
     behavior_space: ${behavior_space}
     archive_selector:
-      _target_: gigaevo.evolution.strategies.map_elites.SumArchiveSelector
+      _target_: custom.archive_selectors.GF32RankRetentionSelector
       fitness_keys:
         - ${primary_key}
       fitness_key_higher_is_better:

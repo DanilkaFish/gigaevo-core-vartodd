@@ -46,6 +46,7 @@ from gigaevo.evolution.engine.snapshot import (
 )
 from gigaevo.evolution.engine.steady_state import SteadyStateEvolutionEngine
 from gigaevo.evolution.engine.stopper import MaxMutantsStopper
+from gigaevo.evolution.strategies.base import MutationSelection
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
 
@@ -137,7 +138,7 @@ class TestSlotReleaseOnCancelInAcquireWindow:
             await block.wait()
             return []
 
-        engine.strategy.select_elites.side_effect = hang
+        engine.strategy.select_for_mutation.side_effect = hang
 
         task = asyncio.create_task(run_one_mutant(engine, task_id=0))
         # Yield so the task enters select_elites and is suspended on block.
@@ -156,7 +157,9 @@ class TestSlotReleaseOnCancelInAcquireWindow:
         await engine._producer_sema.acquire()
 
         parent = _prog()
-        engine.strategy.select_elites.return_value = [parent]
+        engine.strategy.select_for_mutation.return_value = MutationSelection(
+            parents=[parent]
+        )
         block = asyncio.Event()
 
         async def hang_refresh(_p):
@@ -206,7 +209,7 @@ class TestDispatcherCancelDrainsActive:
                     seen_cancels += 1
                 raise
 
-        engine.strategy.select_elites.side_effect = hang_select
+        engine.strategy.select_for_mutation.side_effect = hang_select
 
         disp = asyncio.create_task(dispatcher_loop(engine))
         # Yield until 3 mutant tasks have been spawned.
@@ -554,7 +557,9 @@ class TestSlotTransferredExclusive:
         assert starting_value == 0
 
         parent = _prog()
-        engine.strategy.select_elites.return_value = [parent]
+        engine.strategy.select_for_mutation.return_value = MutationSelection(
+            parents=[parent]
+        )
         from gigaevo.evolution.engine.refresh import ParentRefreshTicket
 
         engine._parent_refresher.refresh_with_ticket = AsyncMock(
@@ -587,7 +592,9 @@ class TestSlotTransferredExclusive:
         """Empty elites: early return WITHOUT slot transfer — finally releases."""
         engine = _make_engine(max_in_flight=1)
         await engine._producer_sema.acquire()
-        engine.strategy.select_elites.return_value = []
+        engine.strategy.select_for_mutation.return_value = MutationSelection(
+            parents=[]
+        )
 
         new_id = await run_one_mutant(engine, task_id=0)
         assert new_id is None

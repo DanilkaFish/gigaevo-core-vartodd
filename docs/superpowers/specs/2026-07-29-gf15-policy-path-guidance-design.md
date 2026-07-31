@@ -19,6 +19,12 @@ optimization remains supporting machinery.
 3. Saved paths should branch before the observed failing rank band. Close
    reopening is appropriate only when the intended experiment genuinely
    targets the inherited tail.
+4. The task description explains the rank objective without describing
+   implementation-specific validation penalties or cap-based fitness shaping.
+5. A high-z, low-acceptance terminal frontier means positive actions are rare.
+   Discovering more of them requires broader z-bucket research; the execution
+   digest must not translate this evidence into advice against increasing
+   `max_buckets`.
 
 ## Algorithm Guidance
 
@@ -31,12 +37,15 @@ Update `config/algorithm/vartodd_diverse_gf16_tohpe_updated.yaml` to:
 - explain that lower-region TODD action starvation can justify raising
   `max_buckets` and `limit_bucket`, including an unrestricted terminal hard cap;
 - connect higher `max_buckets` with both action discovery and action diversity.
+- keep the near-tail block short and direct, without qualifying full terminal
+  search with "when runtime permits".
 
 ## Scope
 
 This change edits the shared task description, the updated TOHPE algorithm
-guidance, and their prompt-contract tests. It does not modify initial programs,
-runtime code, path storage, or metrics.
+guidance, the execution-signal digest, and their contract tests. It does not
+modify initial programs, path storage, metrics, validation, or search runtime
+code.
 
 ## Verification
 
@@ -46,3 +55,5 @@ runtime code, path storage, or metrics.
 - Existing action API, parameter-group, saved-path, runtime, and source-specific
   z-statistics contracts remain present.
 - The task description contains no named optimizer-family catalog.
+- A high-z/low-acceptance digest recommends broader z-bucket research and never
+  emits `NOT more max_buckets`.

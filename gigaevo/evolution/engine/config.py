@@ -71,14 +71,27 @@ class EngineConfig(BaseModel):
             "Backpressure cap. Sizes BOTH the producer pool (concurrent "
             "LLM/refresh tasks; ``_producer_sema``) AND the buffer of "
             "produced-but-not-yet-ingested mutants (``_buffer_sema``). "
-            "Steady-state pipeline depth is therefore ~2 × max_in_flight: "
-            "~N producers alive (mix of LLM-running and holding ready "
-            "result) plus ~N buffered (DAG queue + running + waiting "
-            "ingest). The dispatcher acquires producer_sema and the "
+            "With strict_in_flight=False, steady-state pipeline depth is "
+            "therefore ~2 × max_in_flight: ~N producers alive (mix of "
+            "LLM-running and holding ready result) plus ~N buffered (DAG "
+            "queue + running + waiting ingest). Strict mode acquires buffer "
+            "capacity before producer work and bounds the combined lifecycle "
+            "to N. The dispatcher acquires producer_sema and the "
             "ingestor releases buffer_sema as programs reach "
             "DONE/DISCARDED. ~4 concurrent producers per GPU server is "
             "the sweet spot (measured on Qwen3-235B). Default 5 is tuned "
             "for 3-4 servers with 4 runs."
+        ),
+    )
+    strict_in_flight: bool = Field(
+        default=False,
+        description=(
+            "When True, acquire a buffer slot before parent selection and "
+            "mutation generation. This bounds producing plus persisted "
+            "in-flight mutants by max_in_flight, so generated children cannot "
+            "form a waiting batch behind active DAGs. DAG utilization may dip "
+            "while replacement mutations are generated. When False, preserve "
+            "the throughput-oriented two-stage pipeline."
         ),
     )
     parent_selector: ParentSelector = Field(

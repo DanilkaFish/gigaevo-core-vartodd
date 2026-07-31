@@ -9,7 +9,6 @@ from helper import (
     SamplingBudget,
     SourcePool,
     ToddSearch,
-    TohpePrefixSearch,
     TohpeSearch,
     ZBucketSearch,
 )
@@ -26,9 +25,7 @@ MID_REOPEN_MARGIN = 96
 
 
 class Evaluator(BaseEvaluator):
-    """Spend the budget on three competing prefix paths.  ToDD contributes
-    only one low-cap candidate per step, so width tests branching rather than
-    expensive tail enumeration."""
+    """Use beam width to compare several low-cap TODD branches."""
 
     def float_range(self, low: float, high: float) -> float:
         return self.map_par(lambda x: low + (high - low) / (1.0 + np.exp(-np.clip(float(x), -8.0, 8.0) / 2.5)))
@@ -47,11 +44,7 @@ class Evaluator(BaseEvaluator):
                 ),
             )
         )
-        prefix_samples = SamplingBudget(
-            one_hot=32, sparse=self.int_range(0, 12), dense=self.int_range(4, 18), sparse_max_weight=2
-        )
         todd_samples = SamplingBudget(one_hot=8, sparse=2, dense=0, sparse_max_weight=2)
-        prefix_cap = self.int_range(4000, 30000)
         todd_cap = self.int_range(1024, 6000)
         self.set_action_selection(ActionSelection(beamwidth=3, mode="softmax", temperature=0.35))
         self.set_action_pool(ActionPool(final_size=self.int_range(24, 48)))
@@ -60,14 +53,6 @@ class Evaluator(BaseEvaluator):
                 SamplingBudget(one_hot=14, sparse=0, dense=0, sparse_max_weight=2),
                 SourcePool(keep=6, reserve=1),
                 z_choices=3,
-            )
-        )
-        self.set_tohpeprefix_search(
-            TohpePrefixSearch(
-                prefix_samples,
-                SourcePool(keep=self.int_range(8, 20), reserve=2),
-                actions_per_bucket=2,
-                buckets=ZBucketSearch(min_buckets=64, max_buckets=prefix_cap, limit_bucket=prefix_cap),
             )
         )
         self.set_todd_search(

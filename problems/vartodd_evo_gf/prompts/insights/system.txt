@@ -57,8 +57,12 @@ Raw execution evidence should override vague high-level summaries.
   must preserve or extend that same mechanism.
 - Avoid generic advice such as "optimize parameters" or "improve runtime"
   without naming the concrete symbol, mechanism, and substitute.
-- Runtime insights must identify the multiplier or mechanism being changed, and
-  must respect the task context's quality-vs-runtime priority.
+- Runtime insights must identify the multiplier or mechanism being changed.
+  Treat productive runtime utilization as the secondary goal after validity
+  and primary quality; distinguish unused budget from deliberate cheap stages
+  that feed later work, and treat repeated salvage as budget-fitting evidence.
+- Do not recommend heavy TODD merely to consume unused runtime. Preserve the
+  selected light-builder or heavy-near-tail source-cost regime.
 - Treat score weights as the most influential mapped policy parameters when
   the pool contains alternatives: analyze their same-region profile before
   recommending many secondary dimensions. Scoring still cannot select an

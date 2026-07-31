@@ -20,6 +20,7 @@ import pytest
 from gigaevo.evolution.engine.config import SteadyStateEngineConfig
 from gigaevo.evolution.engine.steady_state import SteadyStateEvolutionEngine
 from gigaevo.evolution.engine.stopper import EvolutionStopper, MaxMutantsStopper
+from gigaevo.evolution.strategies.base import MutationSelection
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
 
@@ -102,7 +103,7 @@ def _make_steady_state_engine(
     storage.get_ids_by_status.return_value = []
     storage.snapshot = MagicMock()
     strategy.get_program_ids.return_value = []
-    strategy.select_elites.return_value = [_prog()]
+    strategy.select_for_mutation.return_value = MutationSelection(parents=[_prog()])
 
     stopper = (
         MaxMutantsStopper(max_generations)
@@ -389,7 +390,9 @@ class TestRealisticE2E:
         engine.config.program_acceptor = MagicMock()
         engine.config.program_acceptor.is_accepted.return_value = True
         engine.strategy.add.return_value = True
-        engine.strategy.select_elites.return_value = [_prog()]
+        engine.strategy.select_for_mutation.return_value = MutationSelection(
+            parents=[_prog()]
+        )
 
         t0 = time.monotonic()
         with patch(

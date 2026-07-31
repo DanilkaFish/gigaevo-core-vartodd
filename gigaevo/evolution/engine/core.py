@@ -27,7 +27,7 @@ from gigaevo.evolution.mutation.base import MutationOperator
 from gigaevo.evolution.mutation.mutation_operator import (
     LLMMutationOperator,
 )
-from gigaevo.evolution.strategies.base import EvolutionStrategy
+from gigaevo.evolution.strategies.base import EvolutionStrategy, MutationSelection
 from gigaevo.llm.bandit import BanditModelRouter, MutationOutcome
 from gigaevo.programs.program import EXCLUDE_STAGE_RESULTS, Program
 from gigaevo.programs.program_state import ProgramState
@@ -224,21 +224,23 @@ class EvolutionEngine:
                     break
             await asyncio.sleep(self.config.loop_interval)
 
-    async def _select_parents_for_mutation(self) -> list[Program]:
+    async def _select_parents_for_mutation(self) -> MutationSelection:
         # In steady-state, every iteration mutates exactly one parent group, so
         # we ask the strategy for ``num_parents`` elites and treat the response
         # as the parent set. May return fewer when the archive is smaller than
         # ``num_parents`` (early run, aggressive rejection) — the mutation
         # operator decides whether single-parent mutation is acceptable.
         num_parents = self.config.parent_selector.num_parents
-        parents = await self.strategy.select_elites(total=num_parents)
+        selection = await self.strategy.select_for_mutation(total=num_parents)
         logger.debug(
-            "[EvolutionEngine] mutants={} Parents selected: {}",
+            "[EvolutionEngine] mutants={} Parents selected: {} ids={} (route={})",
             self.metrics.iteration,
-            len(parents),
+            len(selection.parents),
+            [parent.short_id for parent in selection.parents],
+            selection.route.regime_id if selection.route else "legacy",
         )
-        self.metrics.elites_selected += len(parents)
-        return parents
+        self.metrics.elites_selected += len(selection.parents)
+        return selection
 
     async def _ingest_completed_programs(self) -> None:
         """Validate and hand over any DONE programs to the strategy.

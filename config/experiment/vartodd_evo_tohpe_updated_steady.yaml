@@ -11,23 +11,21 @@ defaults:
   - override /evolution: steady_state
   - _self_
 
-problem:
-  name: vartodd_evo_tohpe_updated
 
 num_parents: 2
 
-# The steady engine has two pools of this size: mutation producers and
-# produced children awaiting ingestion. This keeps work available without a
-# batch-generation barrier.
+# Strict mode admits a mutation producer only when one of these lifecycle
+# slots is free. A generated child therefore cannot wait behind a full set of
+# active DAGs; DAG utilization may dip while its replacement is generated.
 max_in_flight: 6
 engine_config:
   max_in_flight: ${max_in_flight}
+  strict_in_flight: true
 
-# Run six evaluations and pre-create one additional group of six tasks. The
-# extra tasks wait on the runner semaphore and start as slots become free.
+# Create only the current runner batch; do not pre-create semaphore waiters.
 max_concurrent_dags: 6
 runner_config:
-  prefetch_factor: 2
+  prefetch_factor: 1
 
 # Keep the successful GF16 selector unchanged (WeightedEliteSelector,
 # lambda=5.0). In steady state it directly samples one pair per mutation;

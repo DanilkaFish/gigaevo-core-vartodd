@@ -46,6 +46,7 @@ from gigaevo.evolution.engine.mutation import (
 )
 from gigaevo.evolution.mutation.base import MutationSpec
 from gigaevo.evolution.mutation.parent_selector import RandomParentSelector
+from gigaevo.evolution.strategies.base import MutationSelection
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
 
@@ -320,7 +321,7 @@ class _FakeEngine:
         self._parent = parent
 
     async def _select_parents_for_mutation(self):
-        return [self._parent]
+        return MutationSelection(parents=[self._parent])
 
     async def _write_snapshot(self, **kwargs):
         return None

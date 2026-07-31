@@ -1,4 +1,4 @@
-"""Heavy-after-restart seed: PSO scout followed by annealed tail search."""
+"""Heavy-after-restart seed: PSO exploration, then PatternSearch refinement."""
 
 from collections.abc import Iterable
 from helper import (
@@ -11,18 +11,20 @@ from helper import (
     SamplingBudget,
     SourcePool,
     ToddSearch,
-    TohpePrefixSearch,
     TohpeSearch,
     ZBucketSearch,
 )
 import numpy as np
-import pyswarms as ps
-from scipy.optimize import dual_annealing
+from pymoo.algorithms.soo.nonconvex.pattern import PatternSearch
+from pymoo.algorithms.soo.nonconvex.pso import PSO
+from pymoo.core.problem import ElementwiseProblem
+from pymoo.optimize import minimize
 
-OPTIMIZER_FAMILY = "pyswarms_pso_then_scipy_dual_annealing"
+OPTIMIZER_FAMILY = "pymoo_pso_then_pattern_search"
 SEEDS = [40, 41]
 SCOUT_PARTICLES = 16
 SCOUT_ITERS = 4
+SCOUT_EVALS = SCOUT_PARTICLES * SCOUT_ITERS
 TAIL_EVALS = 96
 REOPEN_MARGIN = 48
 TODD_ROLE = "heavy_after_restart"
@@ -78,17 +80,10 @@ class Evaluator(BaseEvaluator):
     def _build_light_scout_policy(self):
         group = "scout"
         samples = SamplingBudget(one_hot="all", sparse=0, dense=16, sparse_max_weight=2)
-        cap = self.int_range(2000, 14000, group=group)
         return (
             ActionSelection(beamwidth=2, mode="softmax", temperature=0.22),
             ActionPool(final_size=self.int_range(14, 28, group=group)),
             TohpeSearch(samples, SourcePool(keep=self.int_range(3, 8, group=group), reserve=1), z_choices=3),
-            TohpePrefixSearch(
-                samples,
-                SourcePool(keep=self.int_range(4, 10, group=group), reserve=1),
-                actions_per_bucket=2,
-                buckets=ZBucketSearch(min_buckets=64, max_buckets=cap, limit_bucket=cap),
-            ),
             ToddSearch(
                 SamplingBudget(one_hot=8, sparse=2, dense=2, sparse_max_weight=2),
                 SourcePool(keep=3, reserve=1),
@@ -108,7 +103,6 @@ class Evaluator(BaseEvaluator):
             sparse_max_weight=3,
         )
         cap = self.int_range(8000, 36000, group=group)
-        prefix_keep = self.int_range(8, 20, group=group)
         todd_keep = self.int_range(6, 16, group=group)
         actions_per_bucket = self.int_range(2, 4, group=group)
         min_buckets = self.int_range(512, 4096, group=group)
@@ -116,12 +110,6 @@ class Evaluator(BaseEvaluator):
             ActionSelection(beamwidth=3, mode="softmax", temperature=0.12),
             ActionPool(final_size=self.int_range(28, 52, group=group)),
             TohpeSearch(samples, SourcePool(keep=8, reserve=2), z_choices=4),
-            TohpePrefixSearch(
-                samples,
-                SourcePool(keep=prefix_keep, reserve=2),
-                actions_per_bucket=actions_per_bucket,
-                buckets=ZBucketSearch(min_buckets=min_buckets, max_buckets=cap, limit_bucket=cap),
-            ),
             ToddSearch(
                 samples,
                 SourcePool(keep=todd_keep, reserve=2),
@@ -131,11 +119,10 @@ class Evaluator(BaseEvaluator):
         )
 
     def _install_policy(self, policy):
-        selection, action_pool, tohpe, prefix, todd = policy
+        selection, action_pool, tohpe, todd = policy
         self.set_action_selection(selection)
         self.set_action_pool(action_pool)
         self.set_tohpe_search(tohpe)
-        self.set_tohpeprefix_search(prefix)
         self.set_todd_search(todd)
 
     def __call__(self, params: Iterable[float]) -> float:
@@ -143,49 +130,52 @@ class Evaluator(BaseEvaluator):
         return float(values.min() + 0.02 * values.std())
 
 
-def optimize_pso(evaluator: Evaluator, iterations: int, seed: int) -> np.ndarray:
+class Problem(ElementwiseProblem):
+    def __init__(self, evaluator: Evaluator):
+        dimensions = len(evaluator.extract_active())
+        super().__init__(
+            n_var=dimensions,
+            n_obj=1,
+            xl=np.full(dimensions, LOWER_BOUND),
+            xu=np.full(dimensions, UPPER_BOUND),
+        )
+        self.evaluator = evaluator
+
+    def _evaluate(self, x, out, *args, **kwargs):
+        out["F"] = self.evaluator(np.asarray(x, dtype=float))
+
+
+def optimize_pso(evaluator: Evaluator, evaluations: int, seed: int) -> np.ndarray:
     current = evaluator.extract_active()
-    dimensions = len(current)
-    if dimensions == 0:
+    if len(current) == 0:
         evaluator([])
         return current
-    rng = np.random.default_rng(seed)
-    positions = rng.uniform(LOWER_BOUND, UPPER_BOUND, size=(SCOUT_PARTICLES, dimensions))
-    positions[0] = np.clip(current, LOWER_BOUND, UPPER_BOUND)
-    optimizer = ps.single.GlobalBestPSO(
-        n_particles=SCOUT_PARTICLES,
-        dimensions=dimensions,
-        options={"c1": 0.4, "c2": 0.4, "w": 0.7},
-        bounds=(np.full(dimensions, LOWER_BOUND), np.full(dimensions, UPPER_BOUND)),
-        init_pos=positions,
+    result = minimize(
+        Problem(evaluator),
+        PSO(pop_size=SCOUT_PARTICLES, w=0.7, c1=1.4, c2=1.4, adaptive=False),
+        termination=("n_eval", evaluations),
+        seed=seed,
+        verbose=False,
     )
-
-    def objective(positions):
-        return np.asarray([evaluator(position) for position in positions], dtype=float)
-
-    _, best = optimizer.optimize(objective, iters=iterations, verbose=False)
-    best = np.asarray(best, dtype=float)
+    best = np.asarray(result.X if result.X is not None else current, dtype=float)
     evaluator.insert(best)
     evaluator.reinit()
     return best
 
 
-def optimize_annealing(evaluator: Evaluator, evaluations: int, seed: int) -> np.ndarray:
+def optimize_pattern_search(evaluator: Evaluator, evaluations: int, seed: int) -> np.ndarray:
     current = evaluator.extract_active()
-    dimensions = len(current)
-    if dimensions == 0:
+    if len(current) == 0:
         evaluator([])
         return current
-    result = dual_annealing(
-        evaluator,
-        bounds=[(LOWER_BOUND, UPPER_BOUND)] * dimensions,
-        maxiter=evaluations,
-        maxfun=evaluations,
-        rng=np.random.default_rng(seed),
-        no_local_search=True,
-        x0=current,
+    result = minimize(
+        Problem(evaluator),
+        PatternSearch(x0=np.clip(current, LOWER_BOUND, UPPER_BOUND), init_delta=0.25, init_rho=0.5),
+        termination=("n_eval", evaluations),
+        seed=seed,
+        verbose=False,
     )
-    best = np.asarray(result.x, dtype=float)
+    best = np.asarray(result.X if result.X is not None else current, dtype=float)
     evaluator.insert(best)
     evaluator.reinit()
     return best
@@ -194,11 +184,11 @@ def optimize_annealing(evaluator: Evaluator, evaluations: int, seed: int) -> np.
 def entrypoint():
     evaluator = Evaluator(path_name="init", max_depth=500)
     evaluator.select_parameter_groups("scores", "scout")
-    scout_params = optimize_pso(evaluator, SCOUT_ITERS, seed=40)
+    scout_params = optimize_pso(evaluator, SCOUT_EVALS, seed=40)
     evaluator.use_heavy_todd = True
     restarted = evaluator.set_up_new_init(0, rank_thr=evaluator.best_rank + REOPEN_MARGIN, xopt=scout_params)
     if restarted is None:
         return evaluator.get_best()
     evaluator.select_parameter_groups("scores", "tail")
-    optimize_annealing(evaluator, TAIL_EVALS, seed=44)
+    optimize_pattern_search(evaluator, TAIL_EVALS, seed=44)
     return evaluator.get_best()
