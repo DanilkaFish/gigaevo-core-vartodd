@@ -182,7 +182,6 @@ def test_provider_reads_route_overlay_on_each_prompt_build(tmp_path) -> None:
     [
         ("missing", None, FileNotFoundError, "missing"),
         ("blank", "   \n", ValueError, "blank"),
-        ("../escape", "unused", ValueError, "unsafe"),
     ],
 )
 def test_provider_rejects_invalid_route_overlays(
@@ -192,7 +191,7 @@ def test_provider_rejects_invalid_route_overlays(
     error,
     match,
 ) -> None:
-    if text is not None and regime_id != "../escape":
+    if text is not None:
         _write_overlay(tmp_path, regime_id, text)
     provider = VartoddIslandsRouteContextProvider(problem_dir=tmp_path)
     route = MutationRoute(
@@ -203,6 +202,42 @@ def test_provider_rejects_invalid_route_overlays(
 
     with pytest.raises(error, match=match):
         provider.build_route_guidance(route)
+
+
+def test_provider_reports_expected_path_for_unsafe_regime_id(tmp_path) -> None:
+    provider = VartoddIslandsRouteContextProvider(problem_dir=tmp_path)
+    route = MutationRoute(
+        regime_id="../escape",
+        island_id="test",
+        guidance=None,
+    )
+    expected_path = tmp_path / "prompts" / "islands" / "../escape.txt"
+
+    with pytest.raises(ValueError) as error:
+        provider.build_route_guidance(route)
+
+    assert "unsafe" in str(error.value)
+    assert "../escape" in str(error.value)
+    assert str(expected_path) in str(error.value)
+
+
+def test_provider_reports_route_and_path_for_invalid_utf8(tmp_path) -> None:
+    directory = tmp_path / "prompts" / "islands"
+    directory.mkdir(parents=True)
+    path = directory / "near_end.txt"
+    path.write_bytes(b"\xff")
+    provider = VartoddIslandsRouteContextProvider(problem_dir=tmp_path)
+    route = MutationRoute(
+        regime_id="near_end",
+        island_id="near_end",
+        guidance=None,
+    )
+
+    with pytest.raises(UnicodeError) as error:
+        provider.build_route_guidance(route)
+
+    assert "near_end" in str(error.value)
+    assert str(path) in str(error.value)
 
 
 async def test_statistics_are_island_local_and_initial_roots_use_ab_initio():

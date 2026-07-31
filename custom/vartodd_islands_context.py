@@ -122,22 +122,27 @@ class VartoddIslandsRouteContextProvider(_PathStoreClient):
 
     def build_route_guidance(self, route: MutationRoute) -> str:
         regime_id = route.regime_id
-        if _REGIME_ID_RE.fullmatch(regime_id) is None:
-            raise ValueError(
-                f"unsafe mutation regime id for prompt overlay: {regime_id!r}"
-            )
         path = (
             self.problem_dir
             / "prompts"
             / "islands"
             / f"{regime_id}.txt"
         )
+        if _REGIME_ID_RE.fullmatch(regime_id) is None:
+            raise ValueError(
+                "unsafe mutation regime id for prompt overlay "
+                f"{regime_id!r}; expected path: {path}"
+            )
         if not path.is_file():
             raise FileNotFoundError(
                 f"missing prompt overlay for route {regime_id!r}: {path}"
             )
         try:
             guidance = path.read_text(encoding="utf-8").strip()
+        except UnicodeError as exc:
+            raise UnicodeError(
+                f"cannot decode prompt overlay for route {regime_id!r}: {path}"
+            ) from exc
         except OSError as exc:
             raise OSError(
                 f"cannot read prompt overlay for route {regime_id!r}: {path}"
