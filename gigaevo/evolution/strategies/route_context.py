@@ -18,6 +18,10 @@ class MutationRouteContextProvider(Protocol):
         """Return whether the route currently has enough external context."""
         ...
 
+    def build_route_guidance(self, route: MutationRoute) -> str | None:
+        """Return problem-owned binding guidance, or None for inline guidance."""
+        ...
+
     def build_assignment(
         self,
         route: MutationRoute,

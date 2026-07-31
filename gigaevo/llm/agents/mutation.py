@@ -481,7 +481,7 @@ class MutationAgent(LangGraphAgent):
             external = self.route_context_provider.build_external_context(
                 explicit_route
             )
-            guidance = explicit_route.guidance.strip()
+            guidance = self._resolve_route_guidance(explicit_route)
             if state is not None:
                 state["selected_mutation_regime"] = explicit_route.regime_id
             return "\n\n".join(
@@ -494,6 +494,12 @@ class MutationAgent(LangGraphAgent):
                 )
                 if part.strip()
             )
+
+        if explicit_route is not None:
+            guidance = self._resolve_route_guidance(explicit_route)
+            if state is not None:
+                state["selected_mutation_regime"] = explicit_route.regime_id
+            return f"{user_prompt}\n\n{guidance}"
 
         live_path_store = self._build_live_path_store_block()
         if live_path_store:
@@ -509,6 +515,30 @@ class MutationAgent(LangGraphAgent):
         elif state is not None:
             state["selected_mutation_regime"] = None
         return user_prompt
+
+    def _resolve_route_guidance(self, route: MutationRoute) -> str:
+        inline = (route.guidance or "").strip()
+        provider_text = ""
+        builder = getattr(
+            self.route_context_provider,
+            "build_route_guidance",
+            None,
+        )
+        if callable(builder):
+            value = builder(route)
+            if value is not None and not isinstance(value, str):
+                raise TypeError("route-context provider guidance must be str or None")
+            provider_text = (value or "").strip()
+
+        if inline and provider_text:
+            raise ValueError(
+                f"route {route.regime_id!r} defines both inline and provider "
+                "binding guidance"
+            )
+        guidance = provider_text or inline
+        if not guidance:
+            raise ValueError(f"route {route.regime_id!r} has no binding guidance")
+        return guidance
 
     def _sample_mutation_regime(self) -> str | None:
         """Sample one optional diversity instruction for this mutation call."""

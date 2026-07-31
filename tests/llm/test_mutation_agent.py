@@ -291,6 +291,7 @@ class TestBuildPrompt:
         provider.build_external_context.return_value = (
             "## Selectable Shared Paths\npath cards"
         )
+        provider.build_route_guidance.return_value = None
         agent = _make_agent(route_context_provider=provider)
         parents = [
             _make_program(metadata={MUTATION_CONTEXT_METADATA_KEY: "first"}),
@@ -324,6 +325,104 @@ class TestBuildPrompt:
         assert [
             call.args[2] for call in provider.filter_parent_context.call_args_list
         ] == list(roles)
+
+    def test_route_provider_supplies_problem_owned_guidance(self):
+        provider = MagicMock()
+        provider.build_assignment.return_value = "## Mutation Assignment\nnear_end"
+        provider.filter_parent_context.side_effect = (
+            lambda route, parent, role, context: context
+        )
+        provider.build_external_context.return_value = (
+            "## Selectable Shared Paths\npath cards"
+        )
+        provider.build_route_guidance.return_value = (
+            "## Required Island Regime: Near-end refinement\nuse margin 5..30"
+        )
+        agent = _make_agent(route_context_provider=provider)
+        parent = _make_program()
+        route = MutationRoute(
+            regime_id="near_end",
+            island_id="near_end",
+            guidance=None,
+            context_profile="path_refinement",
+        )
+        state = _make_state(
+            parents=[parent],
+            explicit_route=route,
+            parent_roles=("target_island",),
+            explicit_regime_guidance=None,
+        )
+
+        prompt = agent.build_prompt(state)["user_prompt"]
+
+        assert "use margin 5..30" in prompt
+        assert prompt.index("Selectable Shared Paths") < prompt.index(
+            "Required Island Regime"
+        )
+
+    def test_inline_route_guidance_remains_supported_without_provider(self):
+        agent = _make_agent(route_context_provider=None)
+        parent = _make_program()
+        route = MutationRoute(
+            regime_id="builder",
+            island_id="builder",
+            guidance="Build from scratch.",
+        )
+        state = _make_state(
+            parents=[parent],
+            explicit_route=route,
+            explicit_regime_guidance=route.guidance,
+        )
+
+        assert "Build from scratch." in agent.build_prompt(state)["user_prompt"]
+
+    def test_route_rejects_competing_inline_and_provider_guidance(self):
+        provider = MagicMock()
+        provider.build_assignment.return_value = "assignment"
+        provider.filter_parent_context.side_effect = (
+            lambda route, parent, role, context: context
+        )
+        provider.build_external_context.return_value = ""
+        provider.build_route_guidance.return_value = "provider guidance"
+        agent = _make_agent(route_context_provider=provider)
+        route = MutationRoute(
+            regime_id="near_end",
+            island_id="near_end",
+            guidance="inline guidance",
+        )
+        state = _make_state(
+            parents=[_make_program()],
+            explicit_route=route,
+            parent_roles=("target_island",),
+            explicit_regime_guidance=route.guidance,
+        )
+
+        with pytest.raises(ValueError, match="both inline and provider"):
+            agent.build_prompt(state)
+
+    def test_route_requires_inline_or_provider_guidance(self):
+        provider = MagicMock()
+        provider.build_assignment.return_value = "assignment"
+        provider.filter_parent_context.side_effect = (
+            lambda route, parent, role, context: context
+        )
+        provider.build_external_context.return_value = ""
+        provider.build_route_guidance.return_value = None
+        agent = _make_agent(route_context_provider=provider)
+        route = MutationRoute(
+            regime_id="near_end",
+            island_id="near_end",
+            guidance=None,
+        )
+        state = _make_state(
+            parents=[_make_program()],
+            explicit_route=route,
+            parent_roles=("target_island",),
+            explicit_regime_guidance=None,
+        )
+
+        with pytest.raises(ValueError, match="no binding guidance"):
+            agent.build_prompt(state)
 
     def test_route_provider_is_not_called_for_legacy_prompt(self):
         provider = MagicMock()

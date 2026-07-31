@@ -15,7 +15,7 @@ class MutationRoute:
 
     regime_id: str
     island_id: str
-    guidance: str
+    guidance: str | None = None
     context_profile: str = "default"
 
 

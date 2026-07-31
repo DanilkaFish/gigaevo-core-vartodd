@@ -233,6 +233,16 @@ class TestMultiIslandConstruction:
         with pytest.raises(ValidationError):
             MutationRouteConfig(**values)
 
+    def test_route_config_allows_provider_owned_guidance(self):
+        config = MutationRouteConfig(
+            regime_id="builder",
+            island_id="island_0",
+            probability=1.0,
+        )
+
+        assert config.guidance is None
+        assert config.context_profile == "default"
+
     def test_route_context_profile_defaults_for_legacy_config(self):
         config = MutationRouteConfig(
             regime_id="builder",

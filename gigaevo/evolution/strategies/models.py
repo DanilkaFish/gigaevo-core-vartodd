@@ -26,12 +26,22 @@ class MutationRouteConfig(BaseModel):
         pattern=r"^[a-zA-Z0-9_-]+$",
     )
     probability: float = Field(gt=0.0)
-    guidance: str = Field(min_length=1)
+    guidance: str | None = None
     context_profile: str = Field(default="default", min_length=1)
 
-    @field_validator("guidance", "context_profile")
+    @field_validator("context_profile")
     @classmethod
-    def text_fields_must_not_be_whitespace(cls, value: str) -> str:
+    def context_profile_must_not_be_whitespace(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("value must not be blank")
+        return stripped
+
+    @field_validator("guidance")
+    @classmethod
+    def guidance_must_not_be_whitespace(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         stripped = value.strip()
         if not stripped:
             raise ValueError("value must not be blank")
