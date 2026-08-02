@@ -185,7 +185,10 @@ class PathStore(_legacy.PathStore):
         return base
 
     def has_selectable_paths(self, *, route_id: str) -> bool:
-        return bool(self.selectable_records(route_id=route_id, top_k=1))
+        _frontier_rank, pinned, records = self._selection_inventory(
+            route_id=route_id,
+        )
+        return pinned is not None or bool(records)
 
     def selectable_records(
         self,
@@ -196,7 +199,7 @@ class PathStore(_legacy.PathStore):
         frontier_nonimproved_limit: int = 6,
         worse_nonimproved_limit: int = 4,
     ) -> list[dict[str, Any]]:
-        _frontier_rank, records = self._selection_context(
+        _frontier_rank, _pinned, records = self._selection_inventory(
             route_id=route_id,
             frontier_nonimproved_limit=frontier_nonimproved_limit,
             worse_nonimproved_limit=worse_nonimproved_limit,
@@ -238,7 +241,9 @@ class PathStore(_legacy.PathStore):
         max_per_rank: int = 2,
         max_chars: int = 24_000,
     ) -> str:
-        frontier_rank, records = self._selection_context(route_id=route_id)
+        frontier_rank, pinned, records = self._selection_inventory(
+            route_id=route_id,
+        )
         frontier_value = (
             str(frontier_rank) if frontier_rank is not None else "none"
         )
@@ -248,6 +253,21 @@ class PathStore(_legacy.PathStore):
         )
         cards: list[str] = []
         used_chars = len(header)
+        pinned_section = ""
+        if pinned is not None:
+            if route_id == "near_end":
+                assert frontier_rank is not None
+                pinned_card = self._render_near_end_card(
+                    pinned,
+                    frontier_rank=frontier_rank,
+                )
+            else:
+                pinned_card = self._render_mid_margin_record(pinned)
+            pinned_section = (
+                "## Pinned Best Long-Descent Path\n"
+                f"route={route_id} frontier_rank={frontier_value}\n\n"
+                f"{pinned_card}\n\n"
+            )
         selected = self._bounded_records(
             records,
             top_k=top_k,
@@ -267,7 +287,11 @@ class PathStore(_legacy.PathStore):
                 continue
             cards.append(card)
             used_chars += separator + len(card)
-        return header + ("\n\n".join(cards) if cards else "- none")
+        return (
+            pinned_section
+            + header
+            + ("\n\n".join(cards) if cards else "- none")
+        )
 
     def update_evidence_card(
         self,
@@ -308,13 +332,29 @@ class PathStore(_legacy.PathStore):
         stats = route_usage.get(route_id)
         return stats if isinstance(stats, dict) else {}
 
-    def _selection_context(
+    @staticmethod
+    def _path_init_rank(record: dict[str, Any]) -> int:
+        """Return the restart rank encoded as ``i<rank>`` in path names."""
+        for key in ("init_rank_thr", "init_rank"):
+            try:
+                value = record.get(key)
+                if value is not None:
+                    return int(value)
+            except (TypeError, ValueError):
+                continue
+        return -1
+
+    def _selection_inventory(
         self,
         *,
         route_id: str,
         frontier_nonimproved_limit: int = 6,
         worse_nonimproved_limit: int = 4,
-    ) -> tuple[int | None, list[dict[str, Any]]]:
+    ) -> tuple[
+        int | None,
+        dict[str, Any] | None,
+        list[dict[str, Any]],
+    ]:
         if route_id not in REFINEMENT_ROUTES:
             raise ValueError(f"unsupported refinement route: {route_id!r}")
         common: list[dict[str, Any]] = []
@@ -331,11 +371,31 @@ class PathStore(_legacy.PathStore):
             record["origin"] = origin
             common.append(record)
         if not common:
-            return None, []
+            return None, None, []
 
         frontier_rank = min(int(record["rank"]) for record in common)
+        pinned = min(
+            (
+                record
+                for record in common
+                if int(record["rank"]) == frontier_rank
+            ),
+            key=lambda record: (
+                -self._path_init_rank(record),
+                int(
+                    self._route_stats(record, route_id).get(
+                        "used_count",
+                        0,
+                    )
+                    or 0
+                ),
+                str(record["name"]),
+            ),
+        )
         eligible: list[dict[str, Any]] = []
         for record in common:
+            if record is pinned:
+                continue
             rank = int(record["rank"])
             stats = self._route_stats(record, route_id)
             failures = int(stats.get("nonimproved_count") or 0)
@@ -376,7 +436,7 @@ class PathStore(_legacy.PathStore):
                 str(record["name"]),
             )
         )
-        return frontier_rank, eligible
+        return frontier_rank, pinned, eligible
 
     def _render_near_end_card(
         self,
@@ -421,6 +481,7 @@ class PathStore(_legacy.PathStore):
                     f"  path_name={record['name']} rank={record['rank']} "
                     f"frontier_rank={frontier_rank} "
                     f"origin={record.get('origin') or self._origin(record)} "
+                    f"init_rank={self._path_init_rank(record)} "
                     f"depth={record.get('depth')} "
                     f"kind={record.get('kind', 'unknown')} "
                     f"band={record.get('restart_band', 'unknown')}"
@@ -457,6 +518,7 @@ class PathStore(_legacy.PathStore):
     def _render_mid_margin_record(self, record: dict[str, Any]) -> str:
         return (
             f"path_name={record['name']} rank={record['rank']} "
+            f"init_rank={self._path_init_rank(record)} "
             f"origin={record.get('origin') or self._origin(record)}"
         )
 
