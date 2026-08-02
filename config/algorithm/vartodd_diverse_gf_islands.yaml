@@ -99,8 +99,8 @@ islands:
       _target_: gigaevo.evolution.strategies.map_elites.WeightedEliteSelector
       fitness_key: ${primary_key}
       fitness_key_higher_is_better: ${higher_is_better}
-      lambda_: 2.0
-      child_penalty: 0.25
+      lambda_: 4.0
+      child_penalty: 0.10
       epsilon: 1e-8
       normalize_fitness: true
     archive_remover:
@@ -126,8 +126,8 @@ islands:
       _target_: gigaevo.evolution.strategies.map_elites.WeightedEliteSelector
       fitness_key: ${primary_key}
       fitness_key_higher_is_better: ${higher_is_better}
-      lambda_: 2.0
-      child_penalty: 0.25
+      lambda_: 4.0
+      child_penalty: 0.10
       epsilon: 1e-8
       normalize_fitness: true
     archive_remover:
@@ -153,8 +153,8 @@ islands:
       _target_: gigaevo.evolution.strategies.map_elites.WeightedEliteSelector
       fitness_key: ${primary_key}
       fitness_key_higher_is_better: ${higher_is_better}
-      lambda_: 2.0
-      child_penalty: 0.25
+      lambda_: 4.0
+      child_penalty: 0.10
       epsilon: 1e-8
       normalize_fitness: true
     archive_remover:
