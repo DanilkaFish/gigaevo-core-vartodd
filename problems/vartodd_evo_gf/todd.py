@@ -68,10 +68,11 @@ class Todd:
         best_counter = 0
         nodes = [root]
         for _ in range(self.depth):
-            new_nodes = []
+            merged_nodes: list[tuple[Node, float | None]] = []
             next_width = 1
             counter = max(counter, len(nodes))
             for node in nodes:
+                parent_nodes: list[tuple[Node, float | None]] = []
                 pcfg = self.dao.policy_config_at(depth=node.state.rows, mode="default")
                 next_width = max(next_width, max(1, int(pcfg.selection.count)))
                 out: Result = policy_iteration(cur_mat=node.state, policy_cfg=pcfg, seed=seed, add_seed=0)
@@ -88,16 +89,48 @@ class Todd:
                         state=state,
                         incoming=info,
                     )
-                    if child.state.rows < best_node.state.rows:
-                        best_counter = 0
-                        best_node = child
-                        if with_report and with_timing:
-                            best_discovered_at = time.perf_counter()
-                    if child.state.rows == best_node.state.rows:
-                        best_counter += 1
-                    new_nodes.append(child)
-            if not new_nodes:
+                    seen_at = (
+                        time.perf_counter()
+                        if with_report and with_timing
+                        else None
+                    )
+                    parent_nodes.append((child, seen_at))
+
+                # policy_iteration guarantees distinct states within one
+                # parent batch.  Only compare against states produced from
+                # earlier parent matrices during the global beam merge.
+                earlier_parent_count = len(merged_nodes)
+                for child, seen_at in parent_nodes:
+                    duplicate_index = next(
+                        (
+                            index
+                            for index, (previous, _seen_at) in enumerate(
+                                merged_nodes[:earlier_parent_count]
+                            )
+                            if child.state == previous.state
+                        ),
+                        None,
+                    )
+                    if duplicate_index is None:
+                        merged_nodes.append((child, seen_at))
+                        continue
+
+                    previous, seen_at = merged_nodes[duplicate_index]
+                    child_score = float(child.incoming.cand.final_score)
+                    previous_score = float(previous.incoming.cand.final_score)
+                    if child_score > previous_score:
+                        merged_nodes[duplicate_index] = (child, seen_at)
+            if not merged_nodes:
                 break 
+            new_nodes = [child for child, _seen_at in merged_nodes]
+            for child, seen_at in merged_nodes:
+                if child.state.rows < best_node.state.rows:
+                    best_counter = 0
+                    best_node = child
+                    if with_report and with_timing:
+                        best_discovered_at = seen_at
+                if child.state.rows == best_node.state.rows:
+                    best_counter += 1
             nodes = heapq.nlargest(next_width, new_nodes, self._beam_key)
 
         if with_report:

@@ -57,7 +57,7 @@ replayed tail are evidence to reallocate optimizer tuning toward exhaustive
 action recall and path checking. In this regime, mapped optimization can be
 worse than stochastic policy sampling combined with wide tree search.
 
-When selectable paths have the same or nearly the same final rank, normally 
+When selectable paths have the same final rank, normally 
 prefer the path with the greater init_rank. A lower-init_rank path was usually 
 produced by an earlier near-tail refinement, so its terminal suffix has already
 received concentrated search and is more likely to be saturated. A greater-init_ranpath
