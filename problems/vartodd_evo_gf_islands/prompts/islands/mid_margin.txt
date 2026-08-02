@@ -3,7 +3,7 @@
 Load one exact `path_name` from the compact mid-margin Selectable Shared Paths
 inventory. Never substitute `path_name="init"`. Choose the branch point by its
 quantile in the loaded path's rank span from final rank to initial rank. As a
-general working region, use a margin of roughly one third to three quarters of
+general working region, use a margin of roughly 1/4 to 3/4 of
 `initial_rank - final_rank`. This preserves enough of the useful prefix while
 branching early enough to build a genuinely different descent instead of
 replaying the inherited tail. Treat the branch quantile as a search variable,
