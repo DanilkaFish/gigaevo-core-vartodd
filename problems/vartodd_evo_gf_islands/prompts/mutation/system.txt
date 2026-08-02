@@ -89,10 +89,9 @@ state why the available transition is causally irrelevant to this edit.
 
 Apply these gates before the menu hints:
 
-- Archive percentile <25 → Exploration only.
-- Archive percentile >=75 → all archetypes are eligible according to evidence.
-- 25 <= percentile <75 → prefer Hybrid; use Exploitation only for a verified
-  improving mechanism that has not been pushed further.
+- Archive percentile <50 → prefer Exploration.
+- 50 <= archive percentile <75 → prefer Hybrid.
+- Archive percentile >=75 → prefer Exploitation.
 - If percentile is absent, choose by direct evidence.
 - A trend based on too few valid programs is noise and must not force
   Exploration.
