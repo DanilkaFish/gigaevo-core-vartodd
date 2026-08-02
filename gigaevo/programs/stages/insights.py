@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from langchain_openai import ChatOpenAI
 
@@ -15,6 +15,11 @@ from gigaevo.programs.program import Program
 from gigaevo.programs.stages.common import CacheOnlyInput
 from gigaevo.programs.stages.langgraph_stage import LangGraphStage
 from gigaevo.programs.stages.stage_registry import StageRegistry
+
+if TYPE_CHECKING:
+    from gigaevo.evolution.strategies.route_context import (
+        InsightsRouteContextProvider,
+    )
 
 
 class InsightsOutput(StageIO):
@@ -46,6 +51,7 @@ class InsightsStage(LangGraphStage):
         metrics_context: MetricsContext,
         max_insights: int = 7,
         prompts_dir: str | Path | None = None,
+        route_context_provider: InsightsRouteContextProvider | None = None,
         **kwargs: Any,
     ) -> None:
         self._max_insights = max_insights
@@ -56,6 +62,7 @@ class InsightsStage(LangGraphStage):
                 metrics_context,
                 max_insights,
                 prompts_dir=prompts_dir,
+                route_context_provider=route_context_provider,
             ),
             program_kwarg="program",
             **kwargs,

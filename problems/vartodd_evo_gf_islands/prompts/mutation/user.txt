@@ -1,9 +1,14 @@
-Produce one child for the Mutation Assignment using the parent programs and
-evidence below.
+Produce the next-generation program from the parent evidence packs below.
 
 {parent_blocks}
 
-Choose one archetype, identify the primary parent and any donor mechanism,
-cite exact evidence in `insights_used`, and return the structured mutation
-object required by the system prompt.
+---
 
+Choose the primary parent and ONE gate-permitted archetype. Reconcile measured
+Lineage transitions before acting on standalone Program Insights: preserve
+supported improving mechanisms, avoid evidenced failures, and use independent
+insights for controlled novelty when they are not contradicted.
+
+Cite every causal input in `insights_used` and `justification`. If Lineage is
+present, cite a relevant transition or explain why it is irrelevant. Emit one
+coherent child following the system prompt's OUTPUT RULES.

@@ -8,6 +8,9 @@ defaults:
 # saved-path evidence ownership differ in the isolated island experiment.
 dag_blueprint:
   nodes:
+    InsightsStage:
+      route_context_provider: ${ref:vartodd_islands_route_context}
+
     EvolutionaryStatisticsCollector:
       _target_: custom.vartodd_islands_context.IslandEvolutionaryStatisticsCollector
       _partial_: true

@@ -14,7 +14,7 @@ Observed delta: {delta:+.5f} → {delta_interpretation}
 Parent: {parent_errors}
 Child: {child_errors}
 
-## EXECUTION AUX CONTEXT
+## EXECUTION EVIDENCE
 
 Parent:
 {parent_aux_context}
@@ -26,8 +26,12 @@ Child:
 
 {diff_blocks}
 
-## PARENT CODE
+## PARENT CODE (reference)
 
 ```python
 {parent_code}
 ```
+
+Return transition insights matching the schema and rules in the system prompt
+(3-5 normally; exactly 2 for the no-diff case). Preserve the distinction
+between measured outcome and causal inference.

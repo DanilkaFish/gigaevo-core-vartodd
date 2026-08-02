@@ -8,7 +8,9 @@ defaults:
 vartodd_islands_route_context:
   _target_: custom.vartodd_islands_context.VartoddIslandsRouteContextProvider
   problem_dir: ${problem.dir}
-  selectable_path_top_k: 8
+  near_end_path_top_k: 4
+  mid_margin_path_top_k: 8
+  selectable_paths_per_rank: 2
   path_cards_max_chars: 24000
   parent_aux_max_chars: 12000
 
@@ -97,8 +99,10 @@ islands:
       _target_: gigaevo.evolution.strategies.map_elites.WeightedEliteSelector
       fitness_key: ${primary_key}
       fitness_key_higher_is_better: ${higher_is_better}
-      lambda_: 5.0
+      lambda_: 2.0
+      child_penalty: 0.25
       epsilon: 1e-8
+      normalize_fitness: true
     archive_remover:
       _target_: gigaevo.evolution.strategies.map_elites.FitnessArchiveRemover
       fitness_key: ${primary_key}
@@ -122,8 +126,10 @@ islands:
       _target_: gigaevo.evolution.strategies.map_elites.WeightedEliteSelector
       fitness_key: ${primary_key}
       fitness_key_higher_is_better: ${higher_is_better}
-      lambda_: 5.0
+      lambda_: 2.0
+      child_penalty: 0.25
       epsilon: 1e-8
+      normalize_fitness: true
     archive_remover:
       _target_: gigaevo.evolution.strategies.map_elites.FitnessArchiveRemover
       fitness_key: ${primary_key}
@@ -147,8 +153,10 @@ islands:
       _target_: gigaevo.evolution.strategies.map_elites.WeightedEliteSelector
       fitness_key: ${primary_key}
       fitness_key_higher_is_better: ${higher_is_better}
-      lambda_: 5.0
+      lambda_: 2.0
+      child_penalty: 0.25
       epsilon: 1e-8
+      normalize_fitness: true
     archive_remover:
       _target_: gigaevo.evolution.strategies.map_elites.FitnessArchiveRemover
       fitness_key: ${primary_key}
@@ -174,7 +182,7 @@ evolution_strategy:
   mutation_routes:
     - regime_id: ab_initio
       island_id: ab_initio
-      probability: 0.40
+      probability: 0.35
       context_profile: ab_initio
     - regime_id: mid_margin
       island_id: mid_margin
@@ -182,5 +190,5 @@ evolution_strategy:
       context_profile: path_refinement
     - regime_id: near_end
       island_id: near_end
-      probability: 0.25
+      probability: 0.3
       context_profile: path_refinement

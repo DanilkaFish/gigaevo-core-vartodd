@@ -11,6 +11,14 @@ from gigaevo.evolution.strategies.base import (
 from gigaevo.programs.program import Program
 
 
+class InsightsRouteContextProvider(Protocol):
+    """Build program-specific context for an insights call."""
+
+    def build_insights_context(self, program: Program) -> str:
+        """Return binding guidance for the program's route, or an empty string."""
+        ...
+
+
 class MutationRouteContextProvider(Protocol):
     """Build route-aware prompt context without coupling it to a strategy."""
 

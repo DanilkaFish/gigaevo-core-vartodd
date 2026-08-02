@@ -95,6 +95,17 @@ ToddSearch(
   reserve-target soft cap (`0` = no soft cap); `limit_bucket` is a hard
   z-candidate cap (`-1` = search the full bucket space, whose size is the
   evaluator's `buckets_space=rank**2 + rank`).
+  At a state with `current_rows=R`, every finite bucket control may use any
+  integer in `0..R**2`; for example, rank 395 permits `0..156025`. The special
+  values above remain available outside that finite range convention.
+
+Finite z coverage is a quality-throughput tradeoff, not a monotonic runtime
+rule. Smaller limits make one policy evaluation cheaper and can buy more
+optimizer evaluations, policy samples, seeds, or restarts. Larger finite
+limits or `limit_bucket=-1` research more z candidates per policy and give the
+search more chances to expose a rare positive action that continues the
+descent. Low `dim` limits the y vectors sampled inside each bucket; it does not
+limit the number of z buckets.
 
 Per-source retention — `SourcePool`:
 ```python
@@ -250,7 +261,7 @@ Path Store (§5) and branches it into a new init. The run then reports:
   refiner must beat;
 - `loaded_rank`: rank where the child actually starts after branching. This is
   not the parent final rank;
-- `loaded_path_name`: which path was loaded; its observed TODD z research and
+- `loaded_path_name`: which path was loaded; its observed aggregate z research and
   active TODD cap are encoded in the current path name (§5);
 - `init_rank_thr`: branch threshold used for the new init.
 
@@ -402,21 +413,22 @@ is visible in the current selectable store block.
 
 Path names look like:
 ```text
-f<final>_i<loaded>_<hash>_z<max_todd_observed>of<max_todd_limit>
+f<final>_i<loaded>_<hash>_z<max_z_researched>of<max_todd_limit>
 ```
 - `f` is the saved path's final rank;
 - `i` is the effective loaded/start rank represented by the path;
-- `max_todd_observed` is the maximum TODD z research actually observed on the
-  saved best path;
+- `max_z_researched` is the maximum aggregate z research actually observed on
+  the saved best path (the legacy `global_info.z_researched` counter);
 - `max_todd_limit` is the maximum active TODD `limit_bucket` in its current
   tail policy (`-1` means unrestricted);
-- `zunknown` means the observed TODD maximum was unavailable.
+- `zunknown` means the observed aggregate maximum was unavailable.
 
-The numerator is observed TODD work; the denominator is configured capacity.
+The numerator is observed aggregate work; the denominator is TODD configured
+capacity.
 Do not use one as a proxy for the other. Legacy names may remain loadable, but
 new code must copy only a currently selectable name. Store fields may include
 rank/final, depth, kind/band, loaded threshold, reuse/improvement counters,
-`limit_buckets`, and `max_todd_z_researched`. The `u/i=U/I` counter is
+`limit_buckets`, and `max_z_researched`. The `u/i=U/I` counter is
 uses/improvements: high `u` with low `i` means the path has been reopened often
 without improving.
 
@@ -496,12 +508,15 @@ Descent patterns:
   is a legitimate lever.
 - Underfilled actual pool: generation or retention is the bottleneck; fix that
   before increasing `ActionPool.final_size`.
-- Flags `lo_acc`/`hard_hiZ` with high z mean positive actions are rare: many
-  buckets were researched and few actions survived. This is z saturation;
-  finding more requires a broader z-bucket research budget. Increase
-  `max_buckets` to search more distinct buckets and increase `limit_bucket`
-  when its hard cap truncates that search. Broader research also gives scoring
-  and beam selection more diverse actions to choose from.
+- Flags `lo_acc`/`hard_hiZ` with high z mean positive actions are rare: this is
+  a hard z region, not evidence that TODD is waste. Such a region may require
+  substantially more z research, retention, and traversal resources to expose
+  the rare rank-lowering action. Increase `max_buckets` to search more distinct
+  buckets and increase `limit_bucket` when its hard cap truncates that search.
+  Broader research also gives scoring and beam selection more diverse actions
+  to choose from. Recommend smaller caps only when comparative rank-yield
+  evidence shows that evaluating more distinct policies is more productive;
+  low accepted-actions-per-z alone never establishes that conclusion.
 
 Reading the optimizer segments. Each `init=<eval>/<rank>:` line shows what
 that segment's evaluations bought; judge budget and optimizer settings by

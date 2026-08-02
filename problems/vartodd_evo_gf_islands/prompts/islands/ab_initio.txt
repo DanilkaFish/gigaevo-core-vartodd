@@ -4,3 +4,29 @@ Start from `Evaluator(path_name="init")` and construct a complete reusable
 path. Use standalone TOHPE as the main early action source. Keep TODD disabled
 or light until lower-rank execution evidence supports a scheduled transition.
 Do not load or infer a saved path.
+
+The main compute strategy is cheap action generation across the easy and middle
+descent so the run can test more policy vectors. Use TOHPE as the primary early
+source and keep TODD disabled or light until reached-band evidence shows TOHPE
+acceptance or pool fill collapsing. Put the saved cost into optimizer
+evaluations, suitable population size, independent seeds, and restarts whose
+placement is justified by segment yield. Introduce heavier TODD only through a
+rank schedule targeting an evidenced hard lower band.
+
+Compare two explicit sampling hypotheses. The more-complete sampling strategy
+can make each policy evaluation less stochastic and scoring more
+representative. The lighter stochastic sampling strategy can fund more
+optimizer evaluations and independent chances to discover a good path which is can be very
+helpful especially due to generally low optimization budget and iregular function.
+
+Independent seeds are not only for final validation. Using multiple seeds during 
+optimization can expose different stochastic action sets and trajectories, helping 
+the search cross mapping/path plateaus and increasing the chance of discovering a strong path. 
+This remains a trade-off: more seeds improve path diversity and robustness but reduce 
+optimizer evaluations or per-policy action-generation depth under a fixed budget.
+
+Inspect optimizer family, initialization, population and social/differential
+parameters, termination, parameter-group staging, and restart placement. Form
+one causal budget-reallocation hypothesis and keep schedules inside rank bands
+that the execution can actually reach. Choose what policy parameters to optimize,
+what to fix and what ranges use.

@@ -1326,8 +1326,8 @@ class BaseEvaluator:
             node = node.parent
         return depth
 
-    def _path_max_todd_z_researched(self, path: Path) -> Optional[int]:
-        return PathStore._path_max_todd_z_researched(path)
+    def _path_max_z_researched(self, path: Path) -> Optional[int]:
+        return PathStore._path_max_z_researched(path)
 
     def _pick_path_for_save(self) -> Path:
         if not self.best_paths:
@@ -1344,11 +1344,11 @@ class BaseEvaluator:
         mid_rank = self._path_name_mid_rank(path)
         todd_limit = PathStore._path_todd_limit_buckets({}, path.daos)
         limit_text = "unknown" if todd_limit is None else str(int(todd_limit))
-        max_todd_z_researched = self._path_max_todd_z_researched(path)
+        max_z_researched = self._path_max_z_researched(path)
         z_text = (
             "unknown"
-            if max_todd_z_researched is None
-            else str(int(max_todd_z_researched))
+            if max_z_researched is None
+            else str(int(max_z_researched))
         )
         program_id = os.getenv("GIGAEVO_PROGRAM_ID") or PROGRAM_ID
         if program_id:

@@ -33,6 +33,7 @@ from gigaevo.prompts import (
 
 if TYPE_CHECKING:
     from gigaevo.evolution.strategies.route_context import (
+        InsightsRouteContextProvider,
         MutationRouteContextProvider,
     )
     from gigaevo.llm.agents.memory_selector import MemorySelectorAgent
@@ -144,6 +145,7 @@ def create_insights_agent(
     metrics_context: MetricsContext,
     max_insights: int = 7,
     prompts_dir: str | Path | None = None,
+    route_context_provider: InsightsRouteContextProvider | None = None,
 ) -> InsightsAgent:
     """Create a fully configured insights agent.
 
@@ -190,6 +192,7 @@ def create_insights_agent(
         user_prompt_template=user_template,
         max_insights=max_insights,
         metrics_formatter=metrics_formatter,
+        route_context_provider=route_context_provider,
     )
 
 

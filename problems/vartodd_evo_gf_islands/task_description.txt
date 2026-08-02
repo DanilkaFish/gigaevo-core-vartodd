@@ -21,6 +21,22 @@ Both levels matter. A strong optimizer cannot select actions that the policy
 never generates, while a useful policy family may remain undiscovered when
 the optimizer repeatedly maps into the same plateaus.
 
+Judge programs in this order: valid execution, lower reliable final rank, and
+then productive runtime when rank quality is not weakened. Runtime is evidence
+about budget allocation, not an objective by itself.
+!! If program have a low runtime (relative to the sentinel) this is strong evidence that
+search is underevaluated, increasing the search budget can give a significant win.
+
+Approximate search cost grows with:
+
+```text
+optimizer evaluations x seeds/seed parallelism x reached path depth
+    x effective beamwidth x per-step action-generation cost
+```
+
+Use this as a causal accounting model rather than a measured runtime formula.
+Every runtime mutation should name which multiplier it reallocates.
+
 The mapped landscape is expensive, irregular, non-convex, and often
 discontinuous. Integer mappings create regions of identical effective
 policies. Rank and path decisions add further plateaus and local minima.
@@ -48,6 +64,19 @@ SamplingBudget(
 count. `sparse` and `dense` add sampled vectors. A null space of dimension
 `dim` contains only `2**dim - 1` nonzero vectors, so low-dimensional terminal
 bands quickly saturate y sampling.
+
+Sampling and optimizer breadth trade against each other. A more-complete sampling
+strategy makes one policy evaluation less stochastic and gives scoring a more
+representative candidate set, but its higher cost leaves room for fewer
+parameter vectors. A lighter stochastic sampling strategy makes each evaluation
+less complete but permits more optimizer evaluations, restarts, seeds, or
+independent trajectories, creating more chances to discover an unusually good
+path. Choose between them from actual source acceptance, pool fill, rank
+quantiles, segment yield, and repeated-best counts.
+
+High-dimensional early null spaces are normally too large to exhaust. At
+terminal dim 1..3, however, the complete nonzero y space has only 1..7 vectors;
+after that space is covered, more y samples cannot improve recall.
 
 The two action sources are:
 
@@ -77,7 +106,7 @@ actions in a hard lower band. TODD cost dominates when z research is broad.
 For `ZBucketSearch`, `min_buckets` is guaranteed research, `max_buckets` is a
 reserve-driven soft target (`0` means no soft target), and `limit_bucket` is
 the hard z-candidate cap (`-1` means the full space). The evaluator reports
-`buckets_space = rank**2 + rank`; caps larger than this have the same effective
+`buckets_space = rank*(rank + 1)/2`; caps larger than this have the same effective
 ceiling. Raising `max_buckets` researches more distinct z buckets and can
 increase both action-discovery probability and the diversity of actions
 available to scoring. `limit_bucket` must be high enough not to truncate the
@@ -310,6 +339,37 @@ not interchangeable.
 Use `path_policy_groups`, `converged_policy_profiles`, and `search_stat`
 together. Raw execution evidence overrides Program Insights when they
 disagree.
+
+### Rank-band diagnosis
+
+Early bands usually have high dimension, strong TOHPE acceptance, near-full
+pools, and large reductions. Deep TODD research there usually trades away
+optimizer evaluations without changing the frontier. Middle bands have falling
+dimension and acceptance; they are the natural location for an evidenced TODD
+schedule transition. Terminal bands have low dimension, rare positive actions,
+large z research, underfilled pools, and small reductions; z coverage,
+retention, and alternative paths often matter more than fine score tuning.
+
+### Optimizer and restart diagnosis
+
+Improvements only at the beginning of a segment followed by silence indicate
+an exhausted basin. A restart with no improvement indicates a poor branch or
+that the same basin was re-entered. Improvements near the end indicate a
+productive segment that may deserve more evaluations. `best_seen_times` close
+to `total_evals` indicates repeated saturation. Flat rank quantiles indicate
+that many vectors map to the same effective policy or path; broad quantiles
+indicate that optimizer tuning still has leverage.
+
+Move budget away from dead segments and preserve productive segments. After
+changing selected parameter groups, reinitializing, or restarting, query the
+new active vector, rebuild the optimizer problem, and discard incompatible
+optimizer state.
+
+### Mutation response rules
+
+When the pool is underfilled, diagnose generation or retention first. Infer
+source contribution from accepted `src=H/T` counts. Treat score signs using the
+score formula and same-region evidence.
 
 Groups report reached rank bands, reduction, profile, dimension, accepted
 TOHPE/TODD actions (`src=H/T`), retained pools, and actual z research.

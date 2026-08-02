@@ -235,9 +235,12 @@ class WeightedEliteSelector(EliteSelector):
     """ShinkaEvolve-inspired weighted sampling combining sigmoid-scaled fitness
     with a children-count novelty penalty.
 
+    Fitness values may optionally be min-max normalized before median centering
+    so ``lambda_`` controls selection pressure independently of metric scale.
+
     Weight for program i:
         s_i = sigmoid(lambda_ * (F(P_i) - median(F)))
-        h_i = 1 / (1 + child_count_i)
+        h_i = 1 / (1 + child_penalty * child_count_i)
         w_i = max(s_i * h_i, epsilon)
     """
 
@@ -247,21 +250,30 @@ class WeightedEliteSelector(EliteSelector):
         fitness_key_higher_is_better: bool = True,
         lambda_: float = 10.0,
         epsilon: float = 1e-8,
+        normalize_fitness: bool = False,
+        child_penalty: float = 1.0,
     ):
+        child_penalty = float(child_penalty)
+        if not np.isfinite(child_penalty) or child_penalty < 0.0:
+            raise ValueError("child_penalty must be finite and non-negative")
         self.fitness_key = fitness_key
         self.higher_is_better = fitness_key_higher_is_better
         self.lambda_ = lambda_
         self.epsilon = epsilon
+        self.normalize_fitness = normalize_fitness
+        self.child_penalty = child_penalty
 
     def __call__(self, programs: list[Program], total: int) -> list[Program]:
         logger.debug(
-            "WeightedEliteSelector: selecting {} from {} programs (key='{}', higher_is_better={}, lambda={}, epsilon={})",
+            "WeightedEliteSelector: selecting {} from {} programs (key='{}', higher_is_better={}, lambda={}, epsilon={}, normalize_fitness={}, child_penalty={})",
             total,
             len(programs),
             self.fitness_key,
             self.higher_is_better,
             self.lambda_,
             self.epsilon,
+            self.normalize_fitness,
+            self.child_penalty,
         )
 
         if len(programs) <= total:
@@ -282,13 +294,27 @@ class WeightedEliteSelector(EliteSelector):
             fitnesses.append(val if self.higher_is_better else -val)
 
         arr = np.asarray(fitnesses, dtype=np.float64)
+        if not np.all(np.isfinite(arr)):
+            logger.warning(
+                "WeightedEliteSelector: non-finite fitnesses detected; "
+                "falling back to uniform sampling"
+            )
+            return random.sample(programs, min(total, len(programs)))
+
+        if self.normalize_fitness:
+            fitness_range = float(np.ptp(arr))
+            if fitness_range < 1e-10:
+                arr = np.full_like(arr, 0.5)
+            else:
+                arr = (arr - float(arr.min())) / fitness_range
+
         median_f = float(np.median(arr))
         child_counts = np.array(
             [p.lineage.child_count for p in programs], dtype=np.float64
         )
 
         s = expit(self.lambda_ * (arr - median_f))
-        h = 1.0 / (1.0 + child_counts)
+        h = 1.0 / (1.0 + self.child_penalty * child_counts)
         weights = np.maximum(s * h, self.epsilon).tolist()
 
         selected = weighted_sample_without_replacement(programs, weights, total)

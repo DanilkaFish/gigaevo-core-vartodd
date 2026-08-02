@@ -10,6 +10,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 
+from gigaevo.evolution.strategies.route_context import InsightsRouteContextProvider
 from gigaevo.llm.agents.base import LangGraphAgent
 from gigaevo.llm.models import MultiModelRouter
 from gigaevo.programs.metrics.formatter import MetricsFormatter
@@ -161,6 +162,7 @@ class InsightsAgent(LangGraphAgent):
         user_prompt_template: str,
         max_insights: int,
         metrics_formatter: MetricsFormatter,
+        route_context_provider: InsightsRouteContextProvider | None = None,
     ):
         """Initialize insights agent.
 
@@ -170,6 +172,7 @@ class InsightsAgent(LangGraphAgent):
             user_prompt_template: User prompt template (with {code}, {metrics}, etc)
             max_insights: Maximum insights to generate
             metrics_formatter: Formatter for program metrics
+            route_context_provider: Optional program-specific guidance source
         """
         self.system_prompt_template = system_prompt_template
         self.user_prompt_template = self._strip_task_description_from_user_template(
@@ -177,6 +180,7 @@ class InsightsAgent(LangGraphAgent):
         )
         self.max_insights = max_insights
         self.metrics_formatter = metrics_formatter
+        self.route_context_provider = route_context_provider
         structured_llm = llm.with_structured_output(ProgramInsights)
 
         super().__init__(structured_llm)
@@ -220,6 +224,17 @@ class InsightsAgent(LangGraphAgent):
             error_section=error_section,
             max_insights=self.max_insights,
         )
+        route_context = (
+            self.route_context_provider.build_insights_context(program)
+            if self.route_context_provider is not None
+            else ""
+        )
+        if route_context.strip():
+            user_prompt = (
+                f"{user_prompt}\n\n"
+                "## Required Island Regime for Insight Analysis\n\n"
+                f"{route_context.strip()}"
+            )
 
         state["messages"] = [
             SystemMessage(content=self.system_prompt_template),

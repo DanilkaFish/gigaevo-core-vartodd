@@ -1,6 +1,32 @@
 ## Required Island Regime: Medium-margin path refinement
 
-Load an exact name from Selectable Shared Paths with margin 30..100. Branch
-before the inherited tail so the policy, source balance, restart placement, or
-trajectory can change materially. Judge success against `loaded_path_rank`,
-not only the global initial rank.
+Load one exact `path_name` from the compact mid-margin Selectable Shared Paths
+inventory. Never substitute `path_name="init"`. Use a margin in the 60–130
+range so the branch begins early enough to build a genuinely different descent
+instead of replaying the inherited tail. Success means a final rank strictly
+below `loaded_path_rank`; equal rank is failure even with a lower TODD cap or
+shorter runtime.
+
+The inventory states the current frontier once, followed by exact path name,
+final rank, and origin. Default to a frontier-rank path. A higher-rank path is
+justified only by a concrete alternative-prefix hypothesis whose target is
+below the inventory frontier. Branch before the inherited failure band, not
+inside the already-collapsed tail.
+
+Reconstruct the easier prefix cheaply with TOHPE. Schedule heavier TODD only
+over reached bands where source acceptance collapses or TOHPE stops supplying
+positive actions. Allocate optimizer evaluations, seeds, and restarts from
+observed segment yield: productive segments may be extended, while flat rank
+quantiles, repeated best ranks, and late last-improvement evidence call for a
+different restart or search allocation.
+
+Independent seeds are not only for final validation. Using multiple seeds during 
+optimization can expose different stochastic action sets and trajectories, helping 
+the search cross mapping/path plateaus and increasing the chance of discovering a strong path. 
+This remains a trade-off: more seeds improve path diversity and robustness but reduce 
+optimizer evaluations.
+
+After a failed refinement, materially change at least one causal component:
+the loaded path, the 60–130 branch margin, the source schedule, optimizer flow,
+action-generation breadth, scoring, beamwidth, or path coverage. Do not submit
+a cheaper replay of the same path as progress.

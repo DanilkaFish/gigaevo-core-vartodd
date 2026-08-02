@@ -1,12 +1,23 @@
-PROGRAM:
+Analyze this program and extract up to {max_insights} independent, actionable
+insights for the next mutation.
+
+## PROGRAM
+
 ```python
 {code}
 ```
 
-CURRENT METRICS: {metrics}
+## CURRENT METRICS
 
-EXECUTION AUX CONTEXT:
+{metrics}
+
+## EXECUTION EVIDENCE
+
 {aux_context}
 
-ERRORS: {error_section}
+## ERRORS
 
+{error_section}
+
+Return the structured `insights` object defined by the system prompt. Ground
+each item in current-program evidence and do not infer unseen lineage.

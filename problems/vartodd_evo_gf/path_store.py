@@ -232,14 +232,14 @@ class PathStore:
                 while x0 and x0[-1] == 0:
                     x0.pop()
             limit_buckets = self._path_todd_limit_buckets({}, path.daos)
-            max_todd_z_researched = self._path_max_todd_z_researched(path)
+            max_z_researched = self._path_max_z_researched(path)
             meta["paths"].append(
                 {
                     "matrix_keys": matrix_keys,
                     "ranks_thr": list(path.ranks_thr),
                     "x0s": x0s,
                     "limit_buckets": limit_buckets,
-                    "max_todd_z_researched": max_todd_z_researched,
+                    "max_z_researched": max_z_researched,
                 }
             )
             incoming_payload.append(incoming_info)
@@ -349,25 +349,14 @@ class PathStore:
         return None
 
     @staticmethod
-    def _path_max_todd_z_researched(path: MctsPath) -> Optional[int]:
-        """Return the largest source-specific TODD z count on this path."""
+    def _path_max_z_researched(path: MctsPath) -> Optional[int]:
+        """Return the largest aggregate z-researched count on this path."""
         values: list[int] = []
         node = path.final_node
         while node is not None:
             incoming = getattr(node, "incoming", None)
             stats = getattr(incoming, "global_info", None)
-            value = getattr(stats, "z_researched_todd", None)
-            aggregate = getattr(stats, "z_researched", None)
-            prefix = getattr(stats, "z_researched_tohpeprefix", None)
-            if (
-                value == 0
-                and prefix == 0
-                and aggregate is not None
-                and int(aggregate) > 0
-            ):
-                # Legacy pickles load missing source-specific fields as zero.
-                # Aggregate work cannot establish how much belonged to TODD.
-                value = None
+            value = getattr(stats, "z_researched", None)
             if value is not None:
                 try:
                     values.append(int(value))
@@ -391,7 +380,7 @@ class PathStore:
             r"lim(?P<legacy_limit>-?\d+|unknown)"
             r"(?:_z(?P<legacy_z>\d+|unknown))?"
             r"|"
-            r"z(?P<todd_z>\d+|unknown)of(?P<limit>-?\d+|unknown)"
+            r"z(?P<researched_z>\d+|unknown)of(?P<limit>-?\d+|unknown)"
             r")"
         )
         records: list[dict[str, Any]] = []
@@ -453,18 +442,20 @@ class PathStore:
                     except Exception:
                         daos_for_best = None
                 limit_buckets = self._path_todd_limit_buckets(best_path_meta, daos_for_best)
-                max_todd_z_researched = best_path_meta.get(
-                    "max_todd_z_researched"
-                )
-                if max_todd_z_researched is None:
+                max_z_researched = best_path_meta.get("max_z_researched")
+                if max_z_researched is None:
+                    max_z_researched = best_path_meta.get(
+                        "max_todd_z_researched"
+                    )
+                if max_z_researched is None:
                     name_match = short_name_re.search(backup_dir.name)
                     if name_match:
                         name_z = (
-                            name_match.group("todd_z")
+                            name_match.group("researched_z")
                             or name_match.group("legacy_z")
                         )
                         if name_z not in (None, "unknown"):
-                            max_todd_z_researched = int(name_z)
+                            max_z_researched = int(name_z)
 
                 init_rank = None
                 init_thr_rank = None
@@ -502,7 +493,7 @@ class PathStore:
                         "rank": best_rank,
                         "depth": best_depth,
                         "limit_buckets": limit_buckets,
-                        "max_todd_z_researched": max_todd_z_researched,
+                        "max_z_researched": max_z_researched,
                         "init_rank": init_rank,
                         "init_rank_thr": init_thr_rank,
                         "kind": self._path_kind(backup_dir.name, init_rank, init_thr_rank),

@@ -32,6 +32,12 @@ _AUX_SECTION_ORDER = (
     "converged_policy_profiles",
     "search_stat",
 )
+_REFINEMENT_ROUTES = frozenset({"mid_margin", "near_end"})
+_INSIGHTS_ROUTE_PROFILES = {
+    "ab_initio": "ab_initio",
+    "mid_margin": "path_refinement",
+    "near_end": "path_refinement",
+}
 
 
 def _load_problem_path_store(problem_dir: Path):
@@ -104,12 +110,19 @@ class VartoddIslandsRouteContextProvider(_PathStoreClient):
         *,
         problem_dir: str | Path,
         root_dir: str | Path | None = None,
-        selectable_path_top_k: int = 8,
+        near_end_path_top_k: int = 4,
+        mid_margin_path_top_k: int = 8,
+        selectable_paths_per_rank: int = 2,
         path_cards_max_chars: int = 24_000,
         parent_aux_max_chars: int = 12_000,
     ):
         super().__init__(problem_dir=problem_dir, root_dir=root_dir)
-        self.selectable_path_top_k = max(0, int(selectable_path_top_k))
+        self.near_end_path_top_k = max(0, int(near_end_path_top_k))
+        self.mid_margin_path_top_k = max(0, int(mid_margin_path_top_k))
+        self.selectable_paths_per_rank = max(
+            0,
+            int(selectable_paths_per_rank),
+        )
         self.path_cards_max_chars = max(0, int(path_cards_max_chars))
         self.parent_aux_max_chars = max(0, int(parent_aux_max_chars))
 
@@ -117,8 +130,24 @@ class VartoddIslandsRouteContextProvider(_PathStoreClient):
         if route.context_profile == "ab_initio":
             return True
         if route.context_profile == "path_refinement":
-            return bool(self._path_store().has_selectable_paths())
+            if (
+                self._route_top_k(route) <= 0
+                or self.selectable_paths_per_rank <= 0
+            ):
+                return False
+            return bool(
+                self._path_store().has_selectable_paths(
+                    route_id=route.regime_id,
+                )
+            )
         return True
+
+    def _route_top_k(self, route: MutationRoute) -> int:
+        if route.regime_id == "near_end":
+            return self.near_end_path_top_k
+        if route.regime_id == "mid_margin":
+            return self.mid_margin_path_top_k
+        return 0
 
     def build_route_guidance(self, route: MutationRoute) -> str:
         regime_id = route.regime_id
@@ -152,6 +181,30 @@ class VartoddIslandsRouteContextProvider(_PathStoreClient):
                 f"blank prompt overlay for route {regime_id!r}: {path}"
             )
         return guidance
+
+    def build_insights_context(self, program: Program) -> str:
+        route_id = next(
+            (
+                value
+                for key in (
+                    "mutation_regime",
+                    "target_island",
+                    "current_island",
+                )
+                if isinstance((value := program.metadata.get(key)), str)
+                and value in _INSIGHTS_ROUTE_PROFILES
+            ),
+            None,
+        )
+        if route_id is None:
+            return ""
+        return self.build_route_guidance(
+            MutationRoute(
+                regime_id=route_id,
+                island_id=route_id,
+                context_profile=_INSIGHTS_ROUTE_PROFILES[route_id],
+            )
+        )
 
     def build_assignment(
         self,
@@ -198,7 +251,9 @@ class VartoddIslandsRouteContextProvider(_PathStoreClient):
         if route.context_profile != "path_refinement":
             return ""
         return self._path_store().render_selectable_path_cards(
-            top_k=self.selectable_path_top_k,
+            route_id=route.regime_id,
+            top_k=self._route_top_k(route),
+            max_per_rank=self.selectable_paths_per_rank,
             max_chars=self.path_cards_max_chars,
         )
 
@@ -307,7 +362,39 @@ class PathCardEnrichmentStage(_PathStoreClient, Stage):
             ),
         }
         name = name_match.group(1)
-        self._path_store().update_evidence_card(name, producer)
+        store = self._path_store()
+        store.update_evidence_card(name, producer)
+
+        route_id = program.metadata.get("mutation_regime")
+        if route_id not in _REFINEMENT_ROUTES:
+            route_id = program.metadata.get("target_island")
+        if route_id in _REFINEMENT_ROUTES:
+            loaded_name_match = re.search(
+                r"(?m)^loaded_path_name:\s*(\S+)\s*$",
+                aux,
+            )
+            loaded_rank = _match_int(
+                aux,
+                r"(?m)^loaded_path_rank:\s*(\d+)",
+            )
+            child_rank = _match_int(aux, r"\bfinal_rank=(\d+)")
+            try:
+                is_valid = float(metrics.get("is_valid", 0.0)) == 1.0
+            except (TypeError, ValueError):
+                is_valid = False
+            if (
+                is_valid
+                and loaded_name_match is not None
+                and loaded_rank is not None
+                and child_rank is not None
+            ):
+                store.record_route_result(
+                    loaded_name_match.group(1),
+                    route_id=str(route_id),
+                    program_id=program.id,
+                    loaded_rank=loaded_rank,
+                    child_rank=child_rank,
+                )
         return StringContainer(data=name)
 
 
