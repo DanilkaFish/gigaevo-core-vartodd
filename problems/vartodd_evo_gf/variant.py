@@ -14,35 +14,53 @@ import yaml
 class VariantSpec:
     """The matrix, path store, and rank target owned by one GF variant."""
 
-    degree: int
+    degree: int | None
     matrix_path: Path
     data_path: Path
     target_final_rank: int
 
 
 def resolve_variant(anchor: str | Path) -> VariantSpec:
-    """Resolve a ``vartodd_evo_gf<N>`` variant without cwd-dependent paths."""
+    """Resolve a degree-based or exact-file GF variant without cwd dependence."""
     logical_path = Path(os.environ.get("VARTODD_VARIANT_DIR", anchor)).absolute()
     variant_dir = logical_path.parent
     if logical_path.is_dir():
         variant_dir = logical_path
-    match = re.fullmatch(r"vartodd_evo_gf(?P<degree>\d+)", variant_dir.name)
-    if match is None:
-        raise ValueError(
-            "expected an asset imported from a vartodd_evo_gf<N> directory, "
-            f"got {variant_dir}"
-        )
-
-    degree = int(match.group("degree"))
     repository_root = Path(
         os.environ.get("VARTODD_REPOSITORY_ROOT", variant_dir.parents[1])
     ).absolute()
-    matrices = sorted((repository_root / "npy").glob(f"gf2^{degree}_*.npy"))
-    if len(matrices) != 1:
-        raise FileNotFoundError(
-            f"expected one gf2^{degree}_*.npy matrix under "
-            f"{repository_root / 'npy'}, found {len(matrices)}"
-        )
+
+    manifest_path = variant_dir / "matrix_manifest.yaml"
+    if manifest_path.is_file():
+        manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+        try:
+            matrix_file = str(manifest["matrix_file"])
+            data_dir = str(manifest["data_dir"])
+            degree_value = manifest.get("degree")
+            degree = None if degree_value is None else int(degree_value)
+        except (AttributeError, KeyError, TypeError, ValueError) as exc:
+            raise ValueError(f"invalid matrix manifest: {manifest_path}") from exc
+        if Path(matrix_file).name != matrix_file or Path(data_dir).name != data_dir:
+            raise ValueError(f"unsafe path in matrix manifest: {manifest_path}")
+        matrix_path = repository_root / "npy" / matrix_file
+        if not matrix_path.is_file():
+            raise FileNotFoundError(f"matrix does not exist: {matrix_path}")
+    else:
+        match = re.fullmatch(r"vartodd_evo_gf(?P<degree>\d+)", variant_dir.name)
+        if match is None:
+            raise ValueError(
+                "expected a GF variant overlay with a matrix manifest or a "
+                f"vartodd_evo_gf<N> directory, got {variant_dir}"
+            )
+        degree = int(match.group("degree"))
+        matrices = sorted((repository_root / "npy").glob(f"gf2^{degree}_*.npy"))
+        if len(matrices) != 1:
+            raise FileNotFoundError(
+                f"expected one gf2^{degree}_*.npy matrix under "
+                f"{repository_root / 'npy'}, found {len(matrices)}"
+            )
+        matrix_path = matrices[0]
+        data_dir = f"data_gf{degree}"
 
     metrics_path = variant_dir / "metrics.yaml"
     metrics = yaml.safe_load(metrics_path.read_text(encoding="utf-8"))
@@ -56,7 +74,7 @@ def resolve_variant(anchor: str | Path) -> VariantSpec:
 
     return VariantSpec(
         degree=degree,
-        matrix_path=matrices[0],
-        data_path=repository_root / f"data_gf{degree}" / "path_backups",
+        matrix_path=matrix_path,
+        data_path=repository_root / data_dir / "path_backups",
         target_final_rank=target_final_rank,
     )

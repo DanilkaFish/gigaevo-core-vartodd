@@ -2,13 +2,14 @@
 """Launch a matrix-specific VarTODD GF evolution from shared source assets.
 
 Usage:
-    python run_gf.py experiment=<hydra-experiment> matrix=<degree> lb=<rank> ub=<rank> [run.py overrides...]
+    python run_gf.py experiment=<hydra-experiment> matrix=<degree|filename.npy> lb=<rank> ub=<rank> [run.py overrides...]
 """
 
 from __future__ import annotations
 
 import os
 from pathlib import Path
+import re
 import sys
 from typing import Iterable, Mapping
 
@@ -39,6 +40,7 @@ _RESERVED_OVERRIDES = {
     "initial_exec_cache_dir",
 }
 DEFAULT_VARTODD_CALL_TIMEOUT = 3800
+MATRIX_MANIFEST_NAME = "matrix_manifest.yaml"
 
 
 def _parse_positive_int(value: str, *, name: str) -> int:
@@ -49,6 +51,23 @@ def _parse_positive_int(value: str, *, name: str) -> int:
     if parsed <= 0:
         raise ValueError(f"{name}=<positive integer> is required")
     return parsed
+
+
+def _parse_matrix(value: str) -> str:
+    try:
+        return str(_parse_positive_int(value, name="matrix"))
+    except ValueError:
+        pass
+    if (
+        not value
+        or Path(value).name != value
+        or "\\" in value
+        or not value.endswith(".npy")
+    ):
+        raise ValueError(
+            "matrix must be a positive GF degree or exact .npy filename"
+        )
+    return value
 
 
 def _parse_rank(value: str, *, name: str) -> int:
@@ -70,7 +89,7 @@ def _parse_nonnegative_int(value: str, *, name: str) -> int:
 
 def _split_launcher_args(
     argv: Iterable[str],
-) -> tuple[int, int, int, bool, int | None, int | None, str, list[str]]:
+) -> tuple[str, int, int, bool, int | None, int | None, str, list[str]]:
     values: dict[str, str] = {}
     forwarded: list[str] = []
     for arg in argv:
@@ -94,7 +113,7 @@ def _split_launcher_args(
     if missing:
         raise ValueError(f"missing launcher argument(s): {', '.join(missing)}")
 
-    matrix = _parse_positive_int(values["matrix"], name="matrix")
+    matrix = _parse_matrix(values["matrix"])
     lower_bound = _parse_rank(values["lb"], name="lb")
     upper_bound = _parse_rank(values["ub"], name="ub")
     if lower_bound >= upper_bound:
@@ -176,14 +195,64 @@ def _link_overlay_assets(
     )
 
 
-def _resolve_matrix(repository_root: Path, matrix: int) -> Path:
-    matches = list((repository_root / "npy").glob(f"gf2^{matrix}_*.npy"))
+def _matrix_degree(matrix: str | int) -> int | None:
+    text = str(matrix)
+    if text.isdecimal() and int(text) > 0:
+        return int(text)
+    return None
+
+
+def _resolve_matrix(repository_root: Path, matrix: str | int) -> Path:
+    degree = _matrix_degree(matrix)
+    if degree is None:
+        matrix_path = repository_root / "npy" / str(matrix)
+        if not matrix_path.is_file():
+            raise FileNotFoundError(f"matrix does not exist: {matrix_path}")
+        return matrix_path
+
+    matches = list((repository_root / "npy").glob(f"gf2^{degree}_*.npy"))
     if len(matches) != 1:
         raise FileNotFoundError(
-            f"expected one gf2^{matrix}_*.npy matrix under "
+            f"expected one gf2^{degree}_*.npy matrix under "
             f"{repository_root / 'npy'}, found {len(matches)}"
         )
     return matches[0]
+
+
+def _matrix_id(matrix: str | int, matrix_path: Path) -> str:
+    degree = _matrix_degree(matrix)
+    if degree is not None:
+        return f"gf{degree}"
+    slug = re.sub(r"[^A-Za-z0-9]+", "_", matrix_path.stem).strip("_").lower()
+    if not slug:
+        raise ValueError(f"cannot derive a safe identifier from {matrix_path.name}")
+    return slug
+
+
+def _write_matrix_manifest(
+    overlay: Path,
+    *,
+    matrix_path: Path,
+    matrix_id: str,
+    degree: int | None,
+    data_dir: str,
+) -> None:
+    manifest_path = overlay / MATRIX_MANIFEST_NAME
+    manifest = {
+        "matrix_file": matrix_path.name,
+        "matrix_id": matrix_id,
+        "degree": degree,
+        "data_dir": data_dir,
+    }
+    if manifest_path.exists():
+        existing = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+        if existing != manifest:
+            raise FileExistsError(
+                f"matrix namespace collision in existing overlay: {manifest_path}"
+            )
+    manifest_path.write_text(
+        yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8"
+    )
 
 
 def build_gf_overrides(
@@ -205,8 +274,15 @@ def build_gf_overrides(
     matrix_path = _resolve_matrix(repository_root, matrix)
     initial_rank = int(np.load(matrix_path, mmap_mode="r").shape[0])
 
-    variant_name = f"vartodd_evo_gf{matrix}"
-    overlay_key = f"gf{matrix}_lb{lower_bound}_ub{upper_bound}"
+    degree = _matrix_degree(matrix)
+    matrix_id = _matrix_id(matrix, matrix_path)
+    if degree is not None:
+        variant_name = f"vartodd_evo_gf{degree}"
+        data_dir = f"data_gf{degree}"
+    else:
+        variant_name = f"vartodd_evo_gf_{matrix_id}"
+        data_dir = f"data_gf_{matrix_id}"
+    overlay_key = f"{matrix_id}_lb{lower_bound}_ub{upper_bound}"
     if initial_programs != "default":
         overlay_key += f"_seeds_{initial_programs}"
     overlay = runtime_root.resolve() / overlay_key / variant_name
@@ -220,14 +296,21 @@ def build_gf_overrides(
         initial_rank,
         effective_call_timeout,
     )
+    _write_matrix_manifest(
+        overlay,
+        matrix_path=matrix_path,
+        matrix_id=matrix_id,
+        degree=degree,
+        data_dir=data_dir,
+    )
     _link_overlay_assets(
         source_dir,
         overlay,
         initial_programs=initial_programs,
     )
-    (repository_root / f"data_gf{matrix}" / "path_backups").mkdir(parents=True, exist_ok=True)
+    (repository_root / data_dir / "path_backups").mkdir(parents=True, exist_ok=True)
 
-    cache_dir = runtime_root.resolve() / "cache" / f"gf{matrix}"
+    cache_dir = runtime_root.resolve() / "cache" / matrix_id
     if initial_programs != "default":
         cache_dir /= initial_programs
     timeout_overrides = []
@@ -263,7 +346,8 @@ def build_gf_environment(
 
 def _usage() -> str:
     return (
-        "Usage: python run_gf.py matrix=<positive integer> lb=<rank> ub=<rank> "
+        "Usage: python run_gf.py matrix=<GF degree|exact .npy filename> "
+        "lb=<rank> ub=<rank> "
         "[cache=true|false] [call_timeout=<seconds>] "
         "[soft_timeout_grace=<seconds>] [initial_programs=default|best] "
         "[ordinary run.py Hydra overrides...]\n\n"

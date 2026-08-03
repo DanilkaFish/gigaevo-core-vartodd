@@ -19,8 +19,8 @@ representative. The lighter stochastic sampling strategy can fund more
 optimizer evaluations and independent chances to discover a good path which is can be very
 helpful especially due to generally low optimization budget and iregular function.
 
-Independent seeds are not only for final validation. Using multiple seeds during 
-optimization can expose different stochastic action sets and trajectories, helping 
+Seeds for policy testing are not only for final validation. Using multiple seeds during 
+optimization can expose different stochastic action sets and trajectories and make the loss more robust, helping 
 the search cross mapping/path plateaus and increasing the chance of discovering a strong path. 
 This remains a trade-off: more seeds improve path diversity and robustness but reduce 
 optimizer evaluations or per-policy action-generation depth under a fixed budget.

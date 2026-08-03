@@ -13,8 +13,11 @@ from run_gf import (
     DEFAULT_VARTODD_CALL_TIMEOUT,
     INITIAL_PROGRAM_POOLS,
     _link_asset,
+    _matrix_degree,
+    _matrix_id,
     _resolve_matrix,
     _split_launcher_args,
+    _write_matrix_manifest,
     _write_metrics,
     build_gf_environment,
 )
@@ -75,8 +78,15 @@ def build_gf_islands_overrides(
     matrix_path = _resolve_matrix(repository_root, matrix)
     initial_rank = int(np.load(matrix_path, mmap_mode="r").shape[0])
 
-    variant_name = f"vartodd_evo_gf_islands{matrix}"
-    overlay_key = f"gf{matrix}_lb{lower_bound}_ub{upper_bound}"
+    degree = _matrix_degree(matrix)
+    matrix_id = _matrix_id(matrix, matrix_path)
+    if degree is not None:
+        variant_name = f"vartodd_evo_gf_islands{degree}"
+        data_dir = f"data_gf_islands{degree}"
+    else:
+        variant_name = f"vartodd_evo_gf_islands_{matrix_id}"
+        data_dir = f"data_gf_islands_{matrix_id}"
+    overlay_key = f"{matrix_id}_lb{lower_bound}_ub{upper_bound}"
     if initial_programs != "default":
         overlay_key += f"_seeds_{initial_programs}"
     overlay = (
@@ -96,6 +106,13 @@ def build_gf_islands_overrides(
         initial_rank,
         effective_call_timeout,
     )
+    _write_matrix_manifest(
+        overlay,
+        matrix_path=matrix_path,
+        matrix_id=matrix_id,
+        degree=degree,
+        data_dir=data_dir,
+    )
     _link_island_overlay_assets(
         legacy_source,
         island_source,
@@ -104,11 +121,11 @@ def build_gf_islands_overrides(
     )
     (
         repository_root
-        / f"data_gf_islands{matrix}"
+        / data_dir
         / "path_backups"
     ).mkdir(parents=True, exist_ok=True)
 
-    cache_dir = runtime_root.resolve() / "islands_cache" / f"gf{matrix}"
+    cache_dir = runtime_root.resolve() / "islands_cache" / matrix_id
     if initial_programs != "default":
         cache_dir /= initial_programs
     timeout_overrides = [f"vartodd_call_timeout={effective_call_timeout}"]
@@ -128,8 +145,9 @@ def build_gf_islands_overrides(
 
 def _usage() -> str:
     return (
-        "Usage: python run_gf_islands.py matrix=<positive integer> lb=<rank> "
-        "ub=<rank> [cache=true|false] [call_timeout=<seconds>] "
+        "Usage: python run_gf_islands.py "
+        "matrix=<GF degree|exact .npy filename> lb=<rank> ub=<rank> "
+        "[cache=true|false] [call_timeout=<seconds>] "
         "[soft_timeout_grace=<seconds>] [initial_programs=default|best] "
         "[ordinary run.py Hydra overrides...]\n\n"
         "Start with a fresh Redis namespace:\n"
