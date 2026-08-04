@@ -32,6 +32,7 @@ SOURCE_ASSETS = (
 INITIAL_PROGRAM_POOLS = {
     "default": "initial_programs",
     "best": "initial_programs_best",
+    "expensive": "initial_programs_expensive",
 }
 _RESERVED_OVERRIDES = {
     "problem.name",
@@ -349,12 +350,14 @@ def _usage() -> str:
         "Usage: python run_gf.py matrix=<GF degree|exact .npy filename> "
         "lb=<rank> ub=<rank> "
         "[cache=true|false] [call_timeout=<seconds>] "
-        "[soft_timeout_grace=<seconds>] [initial_programs=default|best] "
+        "[soft_timeout_grace=<seconds>] "
+        "[initial_programs=default|best|expensive] "
         "[ordinary run.py Hydra overrides...]\n\n"
         "Example:\n"
         "  python run_gf.py experiment=vartodd_evo_tohpe_updated_steady "
         "matrix=16 lb=380 ub=420 call_timeout=3800 "
         "soft_timeout_grace=200 cache=false initial_programs=best redis.db=4\n"
+        "  # For costly TODD evaluations, use initial_programs=expensive\n"
     )
 
 
