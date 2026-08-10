@@ -1,0 +1,1021 @@
+program_id,name,code,created_at,atomic_counter,state,is_complete,generation,iteration,is_root,parent_ids,children_ids,lineage_num_parents,lineage_num_children,lineage_mutation,lineage_generation,metadata_source,metadata_strategy_name,metadata_file_path,metric_fitness,metric_runtime,metric_is_valid,metric_loaded_rank,metric_rank_improved,metadata_aux_info,metadata_mutation_context
+95a525dd-d6e7-4bd6-949e-c93fb6007b79,unnamed,"""""""Heavy-after-restart seed: PSO exploration, then PatternSearch refinement.""""""
+
+from collections.abc import Iterable
+from helper import (
+    ActionPool,
+    ActionSelection,
+    BaseEvaluator,
+    ExplorationScore,
+    FinalizationScore,
+    PolicyScores,
+    SamplingBudget,
+    SourcePool,
+    ToddSearch,
+    TohpeSearch,
+    ZBucketSearch,
+)
+import numpy as np
+from pymoo.algorithms.soo.nonconvex.pattern import PatternSearch
+from pymoo.algorithms.soo.nonconvex.pso import PSO
+from pymoo.core.problem import ElementwiseProblem
+from pymoo.optimize import minimize
+
+OPTIMIZER_FAMILY = ""pymoo_pso_then_pattern_search""
+SEEDS = [40, 41]
+SCOUT_PARTICLES = 16
+SCOUT_ITERS = 4
+SCOUT_EVALS = SCOUT_PARTICLES * SCOUT_ITERS
+TAIL_EVALS = 96
+REOPEN_MARGIN = 48
+TODD_ROLE = ""heavy_after_restart""
+LOWER_BOUND = -1.0
+UPPER_BOUND = 1.0
+
+
+class Evaluator(BaseEvaluator):
+    """"""Declare both stages permanently; the restart only selects the policy.""""""
+
+    def __init__(self, *args, **kwargs):
+        self.use_heavy_todd = False
+        super().__init__(*args, **kwargs)
+
+    def float_range(self, low: float, high: float, *, group: str) -> float:
+        return self.map_par(lambda x: low + (high - low) / (1.0 + np.exp(-np.clip(float(x), -20.0, 20.0))), group=group)
+
+    def int_range(self, low: int, high: int, *, group: str) -> int:
+        return self.map_par(
+            lambda x: min(high, low + int((high - low + 1) / (1.0 + np.exp(-np.clip(float(x), -20.0, 20.0))))),
+            group=group,
+        )
+
+    def policy_mapping(self):
+        self.set_scores(
+            PolicyScores(
+                ExplorationScore(
+                    [self.float_range(-4, 4, group=""scores"") for _ in range(5)],
+                    centers=[0.0, 0.0, 0.0, 0.0, 0.0],
+                    pow=1,
+                ),
+                FinalizationScore(
+                    [self.float_range(-4, 4, group=""scores"") for _ in range(6)],
+                    centers=[
+                        0.0,
+                        self.float_range(0.0, 1.0, group=""scores""),
+                        0.0,
+                        self.float_range(0.0, 1.0, group=""scores""),
+                        0.0,
+                        0.0,
+                    ],
+                    pow=1,
+                ),
+            )
+        )
+        scout_policy = self._build_light_scout_policy()
+        tail_policy = self._build_heavy_tail_policy()
+        if self.use_heavy_todd:
+            self._install_policy(tail_policy)
+        else:
+            self._install_policy(scout_policy)
+
+    def _build_light_scout_policy(self):
+        group = ""scout""
+        samples = SamplingBudget(one_hot=""all"", sparse=0, dense=16, sparse_max_weight=2)
+        return (
+            ActionSelection(beamwidth=2, mode=""softmax"", temperature=0.22),
+            ActionPool(final_size=self.int_range(14, 28, group=group)),
+            TohpeSearch(samples, SourcePool(keep=self.int_range(3, 8, group=group), reserve=1), z_choices=3),
+            ToddSearch(
+                SamplingBudget(one_hot=8, sparse=2, dense=2, sparse_max_weight=2),
+                SourcePool(keep=3, reserve=1),
+                actions_per_bucket=2,
+                buckets=ZBucketSearch(
+                    min_buckets=8, max_buckets=self.int_range(512, 2000, group=group), limit_bucket=2000
+                ),
+            ),
+        )
+
+    def _build_heavy_tail_policy(self):
+        group = ""tail""
+        samples = SamplingBudget(
+            one_hot=""all"",
+            sparse=self.int_range(4, 16, group=group),
+            dense=self.int_range(4, 24, group=group),
+            sparse_max_weight=3,
+        )
+        cap = self.int_range(8000, 36000, group=group)
+        todd_keep = self.int_range(6, 16, group=group)
+        actions_per_bucket = self.int_range(2, 4, group=group)
+        min_buckets = self.int_range(512, 4096, group=group)
+        return (
+            ActionSelection(beamwidth=3, mode=""softmax"", temperature=0.12),
+            ActionPool(final_size=self.int_range(28, 52, group=group)),
+            TohpeSearch(samples, SourcePool(keep=8, reserve=2), z_choices=4),
+            ToddSearch(
+                samples,
+                SourcePool(keep=todd_keep, reserve=2),
+                actions_per_bucket=actions_per_bucket,
+                buckets=ZBucketSearch(min_buckets=min_buckets, max_buckets=cap, limit_bucket=cap),
+            ),
+        )
+
+    def _install_policy(self, policy):
+        selection, action_pool, tohpe, todd = policy
+        self.set_action_selection(selection)
+        self.set_action_pool(action_pool)
+        self.set_tohpe_search(tohpe)
+        self.set_todd_search(todd)
+
+    def __call__(self, params: Iterable[float]) -> float:
+        values = np.asarray(self.run(params, SEEDS), dtype=float)
+        return float(values.min() + 0.02 * values.std())
+
+
+class Problem(ElementwiseProblem):
+    def __init__(self, evaluator: Evaluator):
+        dimensions = len(evaluator.extract_active())
+        super().__init__(
+            n_var=dimensions,
+            n_obj=1,
+            xl=np.full(dimensions, LOWER_BOUND),
+            xu=np.full(dimensions, UPPER_BOUND),
+        )
+        self.evaluator = evaluator
+
+    def _evaluate(self, x, out, *args, **kwargs):
+        out[""F""] = self.evaluator(np.asarray(x, dtype=float))
+
+
+def optimize_pso(evaluator: Evaluator, evaluations: int, seed: int) -> np.ndarray:
+    current = evaluator.extract_active()
+    if len(current) == 0:
+        evaluator([])
+        return current
+    result = minimize(
+        Problem(evaluator),
+        PSO(pop_size=SCOUT_PARTICLES, w=0.7, c1=1.4, c2=1.4, adaptive=False),
+        termination=(""n_eval"", evaluations),
+        seed=seed,
+        verbose=False,
+    )
+    best = np.asarray(result.X if result.X is not None else current, dtype=float)
+    evaluator.insert(best)
+    evaluator.reinit()
+    return best
+
+
+def optimize_pattern_search(evaluator: Evaluator, evaluations: int, seed: int) -> np.ndarray:
+    current = evaluator.extract_active()
+    if len(current) == 0:
+        evaluator([])
+        return current
+    result = minimize(
+        Problem(evaluator),
+        PatternSearch(x0=np.clip(current, LOWER_BOUND, UPPER_BOUND), init_delta=0.25, init_rho=0.5),
+        termination=(""n_eval"", evaluations),
+        seed=seed,
+        verbose=False,
+    )
+    best = np.asarray(result.X if result.X is not None else current, dtype=float)
+    evaluator.insert(best)
+    evaluator.reinit()
+    return best
+
+
+def entrypoint():
+    evaluator = Evaluator(path_name=""init"", max_depth=500)
+    evaluator.select_parameter_groups(""scores"", ""scout"")
+    scout_params = optimize_pso(evaluator, SCOUT_EVALS, seed=40)
+    evaluator.use_heavy_todd = True
+    restarted = evaluator.set_up_new_init(0, rank_thr=evaluator.best_rank + REOPEN_MARGIN, xopt=scout_params)
+    if restarted is None:
+        return evaluator.get_best()
+    evaluator.select_parameter_groups(""scores"", ""tail"")
+    optimize_pattern_search(evaluator, TAIL_EVALS, seed=44)
+    return evaluator.get_best()",2026-08-03 19:52:28.293505+00:00,8,running,False,1,2,True,[],[],0,0,,1,initial_program,full_pso_pattern,/home/danilkafish/Projects/gigaevo-vartodd-private/.run_gf/islands_overlays/gf2_9_khor_lb137_ub165/vartodd_evo_gf_islands_gf2_9_khor/initial_programs/full_pso_pattern.py,,,,,,,
+3c6ccc7a-7b14-4942-b7a4-748527f85e33,unnamed,"from collections.abc import Iterable
+from helper import (
+    ActionPool,
+    ActionSelection,
+    BaseEvaluator,
+    ExplorationScore,
+    FinalizationScore,
+    PolicyScores,
+    SamplingBudget,
+    SourcePool,
+    ToddSearch,
+    TohpeSearch,
+    ZBucketSearch,
+)
+import numpy as np
+from pymoo.algorithms.soo.nonconvex.pso import PSO
+from pymoo.core.problem import ElementwiseProblem
+from pymoo.optimize import minimize
+
+OPTIMIZER_FAMILY = ""pymoo_pso""
+SEEDS = [23, 24, 25]
+SCOUT_EVALS = 144
+MID_REFINE_EVALS = 48
+MID_REOPEN_MARGIN = 96
+
+
+class Evaluator(BaseEvaluator):
+    """"""Use beam width to compare several low-cap TODD branches.""""""
+
+    def float_range(self, low: float, high: float) -> float:
+        return self.map_par(lambda x: low + (high - low) / (1.0 + np.exp(-np.clip(float(x), -8.0, 8.0) / 2.5)))
+
+    def int_range(self, low: int, high: int) -> int:
+        return self.map_par(
+            lambda x: min(high, low + int((high - low + 1) / (1.0 + np.exp(-np.clip(float(x), -8.0, 8.0) / 2.5))))
+        )
+
+    def policy_mapping(self):
+        self.set_scores(
+            PolicyScores(
+                ExplorationScore([self.float_range(-4, 4) for _ in range(5)], centers=[0.0, 0.0, 0.0, 0.0, 0.0], pow=1),
+                FinalizationScore(
+                    [self.float_range(-4, 4) for _ in range(6)], centers=[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], pow=1
+                ),
+            )
+        )
+        todd_samples = SamplingBudget(one_hot=8, sparse=2, dense=0, sparse_max_weight=2)
+        todd_cap = self.int_range(1024, 6000)
+        self.set_action_selection(ActionSelection(beamwidth=3, mode=""softmax"", temperature=0.35))
+        self.set_action_pool(ActionPool(final_size=self.int_range(24, 48)))
+        self.set_tohpe_search(
+            TohpeSearch(
+                SamplingBudget(one_hot=14, sparse=0, dense=0, sparse_max_weight=2),
+                SourcePool(keep=6, reserve=1),
+                z_choices=3,
+            )
+        )
+        self.set_todd_search(
+            ToddSearch(
+                todd_samples,
+                SourcePool(keep=self.int_range(6, 12), reserve=2),
+                actions_per_bucket=3,
+                buckets=ZBucketSearch(min_buckets=50, max_buckets=todd_cap, limit_bucket=todd_cap),
+            )
+        )
+
+    def __call__(self, params: Iterable[float]) -> float:
+        values = np.asarray(self.run(params, SEEDS), dtype=float)
+        return float(values.min() + 0.02 * values.std())
+
+
+class Problem(ElementwiseProblem):
+    def __init__(self, evaluator: Evaluator):
+        n = len(evaluator.extract_active())
+        super().__init__(n_var=n, n_obj=1, xl=np.full(n, -1.0), xu=np.full(n, 1.0))
+        self.evaluator = evaluator
+
+    def _evaluate(self, x, out, *args, **kwargs):
+        out[""F""] = self.evaluator(np.asarray(x, dtype=float))
+
+
+def optimize(evaluator: Evaluator, evaluations: int, seed: int) -> np.ndarray:
+    algorithm = PSO(pop_size=12, w=0.7, c1=0.4, c2=0.4, adaptive=False)
+    result = minimize(Problem(evaluator), algorithm, termination=(""n_eval"", evaluations), seed=seed, verbose=False)
+    return np.asarray(result.X if result.X is not None else evaluator.extract_active(), dtype=float)
+
+
+def entrypoint():
+    evaluator = Evaluator(path_name=""init"", max_depth=500)
+    params = optimize(evaluator, SCOUT_EVALS, seed=23)
+    params = evaluator.set_up_new_init(0, rank_thr=evaluator.best_rank + MID_REOPEN_MARGIN, xopt=params)
+    if params is not None:
+        optimize(evaluator, MID_REFINE_EVALS, seed=26)
+    return evaluator.get_best()",2026-08-03 19:52:28.294482+00:00,12,running,False,1,4,True,[],[],0,0,,1,initial_program,beam3_temp_probe,/home/danilkafish/Projects/gigaevo-vartodd-private/.run_gf/islands_overlays/gf2_9_khor_lb137_ub165/vartodd_evo_gf_islands_gf2_9_khor/initial_programs/beam3_temp_probe.py,,,,,,,
+e2c59c42-a282-4f7f-8f26-1da2136f6843,unnamed,"from collections.abc import Iterable
+from helper import (
+    ActionPool,
+    ActionSelection,
+    BaseEvaluator,
+    ExplorationScore,
+    FinalizationScore,
+    PolicyScores,
+    SamplingBudget,
+    SourcePool,
+    ToddSearch,
+    TohpeSearch,
+    ZBucketSearch,
+)
+import numpy as np
+from pymoo.algorithms.soo.nonconvex.de import DE
+from pymoo.core.problem import ElementwiseProblem
+from pymoo.optimize import minimize
+
+OPTIMIZER_FAMILY = ""pymoo_de""
+SEEDS = [17, 18]
+N_EVAL = 288
+
+
+class Evaluator(BaseEvaluator):
+    def float_range(self, low: float, high: float) -> float:
+        return self.map_par(lambda x: low + (high - low) * np.clip((float(x) + 1.5) / 3.0, 0.0, 1.0))
+
+    def int_range(self, low: int, high: int) -> int:
+        return self.map_par(
+            lambda x: min(high, low + int((high - low + 1) * np.clip((float(x) + 1.5) / 3.0, 0.0, 1.0)))
+        )
+
+    def policy_mapping(self):
+        self.set_scores(
+            PolicyScores(
+                ExplorationScore([self.float_range(-4, 4) for _ in range(5)], centers=[0.0, 0.0, 0.0, 0.0, 0.0], pow=1),
+                FinalizationScore(
+                    [self.float_range(-4, 4) for _ in range(6)], centers=[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], pow=1
+                ),
+            )
+        )
+        samples = SamplingBudget(one_hot=""all"", sparse=8, dense=self.int_range(8, 40), sparse_max_weight=2)
+        todd_cap = self.int_range(512, 6000)
+        self.set_action_selection(ActionSelection(beamwidth=2, mode=""softmax"", temperature=0.16))
+        self.set_action_pool(ActionPool(final_size=self.int_range(12, 28)))
+        self.set_tohpe_search(TohpeSearch(samples, SourcePool(keep=6, reserve=1), z_choices=4))
+        self.set_todd_search(
+            ToddSearch(
+                SamplingBudget(one_hot=8, sparse=2, dense=0, sparse_max_weight=2),
+                SourcePool(keep=self.int_range(2, 5), reserve=1),
+                actions_per_bucket=2,
+                buckets=ZBucketSearch(min_buckets=16, max_buckets=todd_cap, limit_bucket=todd_cap),
+            )
+        )
+
+    def __call__(self, params: Iterable[float]) -> float:
+        values = np.asarray(self.run(params, SEEDS), dtype=float)
+        return float(values.min() + 0.02 * values.std())
+
+
+class Problem(ElementwiseProblem):
+    def __init__(self, evaluator: Evaluator):
+        n = len(evaluator.extract_active())
+        super().__init__(n_var=n, n_obj=1, xl=np.full(n, -1.5), xu=np.full(n, 1.5))
+        self.evaluator = evaluator
+
+    def _evaluate(self, x, out, *args, **kwargs):
+        out[""F""] = self.evaluator(np.asarray(x, dtype=float))
+
+
+def entrypoint():
+    evaluator = Evaluator(path_name=""init"", max_depth=500)
+    algorithm = DE(pop_size=16, variant=""DE/rand/1/bin"", CR=0.9, F=0.6)
+    minimize(Problem(evaluator), algorithm, termination=(""n_eval"", N_EVAL), seed=17, verbose=False)
+    return evaluator.get_best()",2026-08-03 19:52:28.295127+00:00,14,done,True,1,5,True,[],[],0,0,,1,initial_program,lean_beam_de,/home/danilkafish/Projects/gigaevo-vartodd-private/.run_gf/islands_overlays/gf2_9_khor_lb137_ub165/vartodd_evo_gf_islands_gf2_9_khor/initial_programs/lean_beam_de.py,139.44497735145217,155.140736,1.0,210.0,1.0,"## Program execution aux info
+
+path_summary:
+  depth=15 init_rank=210 final_rank=139 total_reduction=71
+  rank_trajectory=210 -> 204 -> 198 -> 192 -> ... -> 144 -> 142 -> 141 -> 139
+path_policy_groups:
+  g1 210->146 red=64 P1 s11 red:5.8(mx8) dim:5..30(m:17.1) src=H:252.4/T:80.7 pool:8(H6/T2) z:0
+  g2 146->141 red=5 P1 s3 red:1.7(mx2) dim:2..4(m:3) src=H:33.3/T:43 pool:8(H6/T2) z:0 split=dim_lt5
+  g3 141->139 red=2 P1 s1 red:2 dim:2 src=H:0/T:2 pool:2(H0/T2) z:0 [T_dom] split=todd_pool_gt_tohpe
+converged_policy_profiles:
+  P1 rank_region=210->146,146->141,141->139 search_shape=beamwidth:2/selection:softmax@0.16 pool=final:26/tohpe:6/1/todd:2/1 samples=tohpe:oh:all/sp:8/de:40/w:2/todd:oh:8/sp:2/de:0/w:2 tohpe_z_choices:4 z_buckets=todd:16..575/575 diversity=todd_actions_per_bucket:2 scores=pool=w[red:+2.252,dim:+3.98,bucket:+0.627,yw:-3.998,zw:+3.689];c[red:0,dim:0,bucket:0,yw:0,zw:0];p=1 final=w[red:+2.716,dim:+0.721,bucket:-3.853,yw:-3.605,zw:+3.534,tohpe:+3.616];c[red:0,dim:0,bucket:0,yw:0,zw:0,tohpe:0];p=1
+search_stat:
+rank 0.9q=161.0 
+rank 0.1q=143.0 
+init=0/210: 2/173 -> 6/171 -> 8/163 -> 10/149 -> 12/145 -> 40/143 -> 70/141 -> 862/139
+last_improvement=862/139 total_evals=1152 best_seen_times=4
+total_evals: 1152
+best_seen_times: 4
+initial_rank: 210
+loaded_rank: 210
+this path name: f139_i210_e2c59c42_z16of575","## Program Metrics
+
+- fitness : 139.445 (Primary objective. rank + sum(P)/P.size() (P is the found decomposition).; ↓ better)
+- is_valid : 1 (Program validity (1 valid, 0 invalid); ↑ better)
+- runtime : 155 (Program runtime in seconds; ↑ better)
+
+---
+
+## Program execution aux info
+
+path_summary:
+  depth=15 init_rank=210 final_rank=139 total_reduction=71
+  rank_trajectory=210 -> 204 -> 198 -> 192 -> ... -> 144 -> 142 -> 141 -> 139
+path_policy_groups:
+  g1 210->146 red=64 P1 s11 red:5.8(mx8) dim:5..30(m:17.1) src=H:252.4/T:80.7 pool:8(H6/T2) z:0
+  g2 146->141 red=5 P1 s3 red:1.7(mx2) dim:2..4(m:3) src=H:33.3/T:43 pool:8(H6/T2) z:0 split=dim_lt5
+  g3 141->139 red=2 P1 s1 red:2 dim:2 src=H:0/T:2 pool:2(H0/T2) z:0 [T_dom] split=todd_pool_gt_tohpe
+converged_policy_profiles:
+  P1 rank_region=210->146,146->141,141->139 search_shape=beamwidth:2/selection:softmax@0.16 pool=final:26/tohpe:6/1/todd:2/1 samples=tohpe:oh:all/sp:8/de:40/w:2/todd:oh:8/sp:2/de:0/w:2 tohpe_z_choices:4 z_buckets=todd:16..575/575 diversity=todd_actions_per_bucket:2 scores=pool=w[red:+2.252,dim:+3.98,bucket:+0.627,yw:-3.998,zw:+3.689];c[red:0,dim:0,bucket:0,yw:0,zw:0];p=1 final=w[red:+2.716,dim:+0.721,bucket:-3.853,yw:-3.605,zw:+3.534,tohpe:+3.616];c[red:0,dim:0,bucket:0,yw:0,zw:0,tohpe:0];p=1
+search_stat:
+rank 0.9q=161.0 
+rank 0.1q=143.0 
+init=0/210: 2/173 -> 6/171 -> 8/163 -> 10/149 -> 12/145 -> 40/143 -> 70/141 -> 862/139
+last_improvement=862/139 total_evals=1152 best_seen_times=4
+total_evals: 1152
+best_seen_times: 4
+initial_rank: 210
+loaded_rank: 210
+this path name: f139_i210_e2c59c42_z16of575
+
+---
+
+## Program Insights
+
+- **[underevaluated_search][beneficial][high]**  — anchor `runtime : 155` (metrics) | mechanism: Runtime at 155s uses only ~8.6% of the 1800s per-program budget, meaning the search budget (N_EVAL=288 over 2 seeds) is far too low and leaves most of the budget unused. More evaluations would let the optimizer explore more parameter vectors and discover lower final ranks. | substitute: N_EVAL = 1200 (4x increase), keeping DE pop_size=16 for 75 generations, or N_EVAL = 2000 for 125 generations
+- **[terminal_pool_underfill][harmful][medium]**  — anchor `g3 141->139 red=2 P1 s1 red:2 dim:2 src=H:0/T:2 pool:2(H0/T2) z:0` (execution_evidence) | mechanism: The terminal rank band (141→139, dim=2) retains only 2 actions in a pool configured for final_size=26 (mapped int_range 12-28, converged to 26). Positive actions are extremely rare at dim=2; the 16 TODD buckets searched with actions_per_bucket=2 yielded only 2 positive candidates. The underfill shows that pool capacity is not the bottleneck—generation is. No pool capacity increase will help. | substitute: Increase min_buckets from 16 to 32-48 to search more distinct z buckets for the terminal band, or increase actions_per_bucket from 2 to 3-4 to generate more candidates per bucket
+- **[optimizer_plateau_waste][harmful][high]**  — anchor `last_improvement=862/139 total_evals=1152 best_seen_times=4` (execution_evidence) | mechanism: Last improvement occurred at evaluation 862, meaning 290 evaluations (25% of budget) were spent on a plateau with no rank improvement. The DE population converged to a basin and could not escape. Without restart logic or a diversity-preserving mechanism, the remaining budget is wasted on flat mappings. | substitute: Add a restart threshold: if no improvement for >100 consecutive evaluations, call evaluator.set_up_new_init(0, rank_thr=evaluator.best_rank + 1, xopt=xopt) and reinitialize the optimizer
+- **[dead_parameter_dimension][harmful][medium]**  — anchor `max_buckets=todd_cap, limit_bucket=todd_cap` (program) | mechanism: todd_cap (mapped int_range 512-6000) is used as both max_buckets and limit_bucket, but actual TODD z research was only 16 buckets (path name z16of575). With min_buckets=16 and todd keep=2/reserve=1, TODD stops as soon as it finds enough actions—long before reaching 512+. This parameter never constrains behavior, wasting an optimizer dimension on a dead knob. The optimization vector has one coordinate whose value changes the evaluation outcome negligibly or not at all. | substitute: Remove todd_cap from the mapping; hardcode max_buckets=min_buckets (16) and limit_bucket=-1 (unlimited, since reserve logic already bounds research)
+- **[de_population_generation_mismatch][fragile][medium]**  — anchor `N_EVAL = 288
+DE(pop_size=16)` (program) | mechanism: With pop_size=16 and N_EVAL=288, DE runs only 18 generations (16 initial + 272 gen evals = 288). The rugged, discontinuous integer mapping landscape requires many generations to converge; 18 generations is too few for the optimizer to escape local plateaus reliably. The flat quantile spread (0.9q=161, 0.1q=143) suggests the optimizer has not fully explored the space. | substitute: Reduce pop_size to 8 and increase N_EVAL to match, giving 36 generations for same budget, OR increase N_EVAL to 1200 (75 generations at pop_size=16)
+- **[tohpe_dense_sampling_overkill][neutral][low]**  — anchor `dense=self.int_range(8, 40)` (program) | mechanism: TOHPE is configured with dense up to 40 sampled y-vectors, but in the terminal band (dim=2) the entire nonzero null space has only 3 vectors (2^2-1). one_hot='all' already enumerates 2 weight-1 vectors, so dense=40 samples redundant vectors. While this over-sampling does not harm discovery (TOHPE finds 0 actions in the terminal band anyway), it wastes per-evaluation runtime on redundant null-space sampling in all bands. | substitute: Reduce dense range to int_range(4, 12) or add a rank schedule that drops dense to 0 below dim ≤ 3
+- **[narrow_beam_limits_trajectory_diversity][fragile][low]**  — anchor `beamwidth=2, mode=""softmax"", temperature=0.16` (program) | mechanism: Beamwidth=2 with softmax temperature 0.16 (near-deterministic) expands only 2 actions per node and retains 2 states per depth. In the middle band (g2, dim 2-4) where TOHPE and TODD contribute roughly equally, this narrow beam may discard viable trajectories that differ from the top-2 scored actions. The converged profile shows a single path rather than diverse descent alternatives. | substitute: Increase beamwidth to 3-4 and raise temperature to 0.3-0.5 for more stochastic trajectory exploration, or add a rank schedule that widens the beam below rank 150
+
+---
+
+## Evolutionary Statistics
+
+This program: iter=5  gen=1  fitness=139.445 (rank 1/1 in window)
+Window: iters [-10..20]  programs=6  valid=1
+Trend (window): flat  [only 1 valid programs — too few for trend]
+Best in window: 139.445 at iter 5  (offset +0 from this program)
+Iters since last new best (global): 5
+Invalid streak (max consecutive in window): 6
+Recent failure rate: 6/6 invalid (100.0%)
+
+---
+
+## Execution Signal Digest
+final_rank=139  total_reduction=71  loaded_rank=210
+optimizer: best_seen_times=4  total_evals=1152  rank_0.1q=143.0  rank_0.9q=161.0
+last_group: 141->139  z=0  dim=2  src=H:0/T:2  pool=2(H0/T2)  flags=T_dom
+last_profile: P1  pool_final=26  actions_per_bucket=2
+reduction_by_group: 210->146:64  146->141:5  141->139:2
+frontier: 141->139 is TODD-driven; keep TODD recall, tune y/reserve before cutting z
+
+---
+
+## Program Aux Excerpt
+
+path_summary:
+  depth=15 init_rank=210 final_rank=139 total_reduction=71
+  rank_trajectory=210 -> 204 -> 198 -> 192 -> ... -> 144 -> 142 -> 141 -> 139
+
+path_policy_groups:
+  g1 210->146 red=64 P1 s11 red:5.8(mx8) dim:5..30(m:17.1) src=H:252.4/T:80.7 pool:8(H6/T2) z:0
+  g2 146->141 red=5 P1 s3 red:1.7(mx2) dim:2..4(m:3) src=H:33.3/T:43 pool:8(H6/T2) z:0 split=dim_lt5
+  g3 141->139 red=2 P1 s1 red:2 dim:2 src=H:0/T:2 pool:2(H0/T2) z:0 [T_dom] split=todd_pool_gt_tohpe
+
+converged_policy_profiles:
+  P1 rank_region=210->146,146->141,141->139 search_shape=beamwidth:2/selection:softmax@0.16 pool=final:26/tohpe:6/1/todd:2/1 samples=tohpe:oh:all/sp:8/de:40/w:2/todd:oh:8/sp:2/de:0/w:2 tohpe_z_choices:4 z_buckets=todd:16..575/575 diversity=todd_actions_per_bucket:2 scores=pool=w[red:+2.252,dim:+3.98,bucket:+0.627,yw:-3.998,zw:+3.689];c[red:0,dim:0,bucket:0,yw:0,zw:0];p=1 final=w[red:+2.716,dim:+0.721,bucket:-3.853,yw:-3.605,zw:+3.534,tohpe:+3.616];c[red:0,dim:0,bucket:0,yw:0,zw:0,tohpe:0];p=1
+
+search_stat:
+rank 0.9q=161.0 
+rank 0.1q=143.0 
+init=0/210: 2/173 -> 6/171 -> 8/163 -> 10/149 -> 12/145 -> 40/143 -> 70/141 -> 862/139
+last_improvement=862/139 total_evals=1152 best_seen_times=4
+total_evals: 1152
+best_seen_times: 4
+initial_rank: 210
+loaded_rank: 210
+this path name: f139_i210_e2c59c42_z16of575"
+84d6670c-4e6d-4313-94c8-e44e9573f6d3,unnamed,"""""""Light TODD seed: search the joint policy, then refine score weights.""""""
+
+from collections.abc import Iterable
+from helper import (
+    ActionPool,
+    ActionSelection,
+    BaseEvaluator,
+    ExplorationScore,
+    FinalizationScore,
+    PolicyScores,
+    SamplingBudget,
+    SourcePool,
+    ToddSearch,
+    TohpeSearch,
+    ZBucketSearch,
+)
+import numpy as np
+from pymoo.algorithms.soo.nonconvex.cmaes import CMAES
+from pymoo.algorithms.soo.nonconvex.pso import PSO
+from pymoo.core.problem import ElementwiseProblem
+from pymoo.optimize import minimize
+
+OPTIMIZER_FAMILY = ""pymoo_pso_then_cma_es""
+SEEDS = [21, 22]
+JOINT_TRIALS = 192
+SCORE_EVALS = 96
+TODD_ROLE = ""light""
+LOWER_BOUND = -2.4
+UPPER_BOUND = 2.4
+
+
+def objective(ranks: list[int]) -> float:
+    values = np.asarray(ranks, dtype=float)
+    return float(values.min() + 0.015 * values.std())
+
+
+class Evaluator(BaseEvaluator):
+    """"""TOHPE supplies most candidates; light TODD is an escape path.""""""
+
+    def float_range(self, low: float, high: float, *, group: str) -> float:
+        return self.map_par(lambda x: low + (high - low) * (0.5 + 0.5 * np.tanh(float(x) / 1.6)), group=group)
+
+    def int_range(self, low: int, high: int, *, group: str) -> int:
+        return self.map_par(
+            lambda x: min(high, low + int((high - low + 1) * (0.5 + 0.5 * np.tanh(float(x) / 1.6)))), group=group
+        )
+
+    def policy_mapping(self):
+        explore = ExplorationScore(
+            [self.float_range(-4.0, 4.0, group=""scores"") for _ in range(5)],
+            centers=[0.0, 0.0, 0.0, 0.0, 0.0],
+            pow=1,
+        )
+        final = FinalizationScore(
+            [self.float_range(-4.0, 4.0, group=""scores"") for _ in range(6)],
+            centers=[0.0, 0.0, 0.0, 0.0, self.float_range(0.0, 1.0, group=""scores""), 0.0],
+            pow=1,
+        )
+        self.set_scores(PolicyScores(exploration=explore, final=final))
+        tohpe_sampling = SamplingBudget(
+            one_hot=""all"",
+            sparse=self.int_range(16, 96, group=""search""),
+            dense=self.int_range(8, 64, group=""search""),
+            sparse_max_weight=self.int_range(2, 5, group=""search""),
+        )
+        self.set_action_selection(ActionSelection(beamwidth=2, mode=""best""))
+        self.set_action_pool(ActionPool(final_size=self.int_range(32, 72, group=""search"")))
+        self.set_tohpe_search(
+            TohpeSearch(
+                sampling=tohpe_sampling,
+                pool=SourcePool(keep=self.int_range(20, 64, group=""search""), reserve=2),
+                z_choices=self.int_range(3, 14, group=""search""),
+            )
+        )
+        self.set_todd_search(
+            ToddSearch(
+                sampling=SamplingBudget(one_hot=8, sparse=2, dense=0, sparse_max_weight=2),
+                pool=SourcePool(keep=2, reserve=1),
+                actions_per_bucket=2,
+                buckets=ZBucketSearch(min_buckets=8, max_buckets=32, limit_bucket=256),
+            )
+        )
+
+    def __call__(self, params: Iterable[float]) -> float:
+        return objective(self.run(params, SEEDS))
+
+
+class Problem(ElementwiseProblem):
+    def __init__(self, evaluator: Evaluator):
+        dimensions = len(evaluator.extract_active())
+        super().__init__(
+            n_var=dimensions,
+            n_obj=1,
+            xl=np.full(dimensions, LOWER_BOUND),
+            xu=np.full(dimensions, UPPER_BOUND),
+        )
+        self.evaluator = evaluator
+
+    def _evaluate(self, x, out, *args, **kwargs):
+        out[""F""] = self.evaluator(np.asarray(x, dtype=float))
+
+
+def optimize_pso(evaluator: Evaluator, evaluations: int, seed: int) -> np.ndarray:
+    current = evaluator.extract_active()
+    if len(current) == 0:
+        evaluator([])
+        return current
+    result = minimize(
+        Problem(evaluator),
+        PSO(pop_size=16, w=0.7, c1=1.4, c2=1.4, adaptive=True),
+        termination=(""n_eval"", evaluations),
+        seed=seed,
+        verbose=False,
+    )
+    best = np.asarray(result.X if result.X is not None else current, dtype=float)
+    evaluator.insert(best)
+    evaluator.reinit()
+    return best
+
+
+def optimize_cma(evaluator: Evaluator, evaluations: int, seed: int) -> np.ndarray:
+    current = evaluator.extract_active()
+    if len(current) == 0:
+        evaluator([])
+        return current
+    result = minimize(
+        Problem(evaluator),
+        CMAES(x0=np.clip(current, LOWER_BOUND, UPPER_BOUND), sigma=0.65, pop_size=8, restarts=0),
+        termination=(""n_eval"", evaluations),
+        seed=seed,
+        verbose=False,
+    )
+    best = np.asarray(result.X if result.X is not None else current, dtype=float)
+    evaluator.insert(best)
+    evaluator.reinit()
+    return best
+
+
+def entrypoint():
+    evaluator = Evaluator(path_name=""init"", max_depth=500)
+    evaluator.select_all_parameter_groups()
+    optimize_pso(evaluator, JOINT_TRIALS, seed=21)
+    evaluator.select_parameter_groups(""scores"")
+    optimize_cma(evaluator, SCORE_EVALS, seed=24)
+    return evaluator.get_best()",2026-08-03 19:52:28.292726+00:00,9,running,False,1,1,True,[],[],0,0,,1,initial_program,tohpe_weights_budget_probe,/home/danilkafish/Projects/gigaevo-vartodd-private/.run_gf/islands_overlays/gf2_9_khor_lb137_ub165/vartodd_evo_gf_islands_gf2_9_khor/initial_programs/tohpe_weights_budget_probe.py,,,,,,,
+212a9d4e-52d7-44b5-8311-2fbd49e228c4,unnamed,"""""""Heavy-tail schedule explored by explicit DE, then refined by PSO.""""""
+
+from collections.abc import Iterable
+from helper import (
+    ActionPool,
+    ActionSelection,
+    BaseEvaluator,
+    ExplorationScore,
+    FinalizationScore,
+    INITIAL_RANK,
+    PolicyScores,
+    SamplingBudget,
+    SourcePool,
+    TARGET_FINAL_RANK,
+    ToddSearch,
+    TohpeSearch,
+    ZBucketSearch,
+)
+import numpy as np
+from pymoo.algorithms.soo.nonconvex.de import DE
+from pymoo.algorithms.soo.nonconvex.pso import PSO
+from pymoo.core.problem import ElementwiseProblem
+from pymoo.optimize import minimize
+
+OPTIMIZER_FAMILY = ""pymoo_de_then_pso_with_restart""
+SWITCH_RANK = TARGET_FINAL_RANK + 55
+SCHEDULE = [INITIAL_RANK, SWITCH_RANK]
+SEEDS = [23, 24]
+FIRST_STAGE_EVALS = 64
+RESTART_EVALS = 48
+REOPEN_MARGIN = 55
+TODD_ROLE = ""heavy_tail_schedule""
+LOWER_BOUND = -2.0
+UPPER_BOUND = 2.0
+EARLY_TODD_LIMIT = 512
+
+
+class Evaluator(BaseEvaluator):
+    """"""Use finite TODD early and full z coverage only near the target.""""""
+
+    def float_range(self, low: float, high: float, *, group: str = ""scores"") -> float:
+        return self.map_par(
+            lambda x: low + (high - low) * (0.5 + 0.5 * np.tanh(float(x) / 2.2)),
+            group=group,
+        )
+
+    def int_range(self, low: int, high: int, *, group: str = ""policy"") -> int:
+        return self.map_par(
+            lambda x: min(
+                high,
+                low
+                + int(
+                    (high - low + 1)
+                    * (0.5 + 0.5 * np.tanh(float(x) / 2.2))
+                ),
+            ),
+            group=group,
+        )
+
+    def policy_mapping(self):
+        self.set_scores(
+            PolicyScores(
+                ExplorationScore(
+                    [self.float_range(-3.5, 3.5) for _ in range(5)], centers=[0.0, 0.0, 0.0, 0.0, 0.0], pow=1
+                ),
+                FinalizationScore(
+                    [self.float_range(-3.5, 3.5) for _ in range(6)],
+                    centers=[
+                        0.0,
+                        0.0,
+                        0.0,
+                        self.float_range(0.0, 1.0),
+                        self.float_range(0.0, 1.0),
+                        0.0,
+                    ],
+                    pow=1,
+                ),
+            )
+        )
+        tail_keep = self.int_range(8, 18)
+        tail_samples = SamplingBudget(
+            one_hot=""all"", sparse=self.int_range(4, 16), dense=self.int_range(4, 20), sparse_max_weight=3
+        )
+        terminal_actions_per_bucket = self.int_range(2, 5)
+        terminal_min_buckets = self.int_range(512, 2048)
+        self.set_action_selection(
+            SCHEDULE,
+            [ActionSelection(beamwidth=2, mode=""best""), ActionSelection(beamwidth=3, mode=""softmax"", temperature=0.14)],
+        )
+        self.set_action_pool(SCHEDULE, [ActionPool(final_size=24), ActionPool(final_size=self.int_range(28, 56))])
+        self.set_tohpe_search(
+            SCHEDULE,
+            [
+                TohpeSearch(
+                    SamplingBudget(one_hot=""all"", sparse=16, dense=12, sparse_max_weight=3),
+                    SourcePool(keep=self.int_range(12, 32), reserve=1),
+                    z_choices=self.int_range(4, 10),
+                ),
+                TohpeSearch(
+                    SamplingBudget(one_hot=24, sparse=8, dense=6, sparse_max_weight=3),
+                    SourcePool(keep=8, reserve=0),
+                    z_choices=2,
+                ),
+            ],
+        )
+        self.set_todd_search(
+            SCHEDULE,
+            [
+                ToddSearch(
+                    SamplingBudget(one_hot=8, sparse=2, dense=0, sparse_max_weight=2),
+                    SourcePool(keep=2, reserve=1),
+                    actions_per_bucket=2,
+                    buckets=ZBucketSearch(min_buckets=8, max_buckets=128, limit_bucket=EARLY_TODD_LIMIT),
+                ),
+                ToddSearch(
+                    tail_samples,
+                    SourcePool(keep=tail_keep, reserve=2),
+                    actions_per_bucket=terminal_actions_per_bucket,
+                    buckets=ZBucketSearch(min_buckets=terminal_min_buckets, max_buckets=100000, limit_bucket=-1),
+                ),
+            ],
+        )
+
+    def __call__(self, params: Iterable[float]) -> float:
+        values = np.asarray(self.run(params, SEEDS), dtype=float)
+        return float(values.min() + 0.015 * values.std())
+
+
+class Problem(ElementwiseProblem):
+    def __init__(self, evaluator: Evaluator):
+        active = evaluator.extract_active()
+        super().__init__(
+            n_var=len(active),
+            n_obj=1,
+            xl=np.full(len(active), LOWER_BOUND),
+            xu=np.full(len(active), UPPER_BOUND),
+        )
+        self.evaluator = evaluator
+
+    def _evaluate(self, x, out, *args, **kwargs):
+        out[""F""] = self.evaluator(np.asarray(x, dtype=float))
+
+
+def optimize(
+    evaluator: Evaluator, algorithm, evaluations: int, seed: int
+) -> np.ndarray:
+    result = minimize(
+        Problem(evaluator),
+        algorithm,
+        termination=(""n_eval"", evaluations),
+        seed=seed,
+        verbose=False,
+    )
+    best = np.asarray(
+        result.X if result.X is not None else evaluator.extract_active(),
+        dtype=float,
+    )
+    evaluator.insert(best)
+    evaluator.reinit()
+    return best
+
+
+def entrypoint():
+    evaluator = Evaluator(path_name=""init"", max_depth=500)
+    params = optimize(
+        evaluator,
+        DE(pop_size=16, variant=""DE/rand/1/bin"", CR=0.9, F=0.6),
+        FIRST_STAGE_EVALS,
+        seed=23,
+    )
+    restarted = evaluator.set_up_new_init(
+        0, rank_thr=evaluator.best_rank + REOPEN_MARGIN, xopt=params
+    )
+    if restarted is not None:
+        optimize(
+            evaluator,
+            PSO(pop_size=16, w=0.8, c1=0.55, c2=0.55, adaptive=True),
+            RESTART_EVALS,
+            seed=27,
+        )
+    return evaluator.get_best()",2026-08-03 19:52:28.291641+00:00,15,running,False,1,0,True,[],[],0,0,,1,initial_program,todd_hard_tail_budget_split,/home/danilkafish/Projects/gigaevo-vartodd-private/.run_gf/islands_overlays/gf2_9_khor_lb137_ub165/vartodd_evo_gf_islands_gf2_9_khor/initial_programs/todd_hard_tail_budget_split.py,,,,,,,
+555dfabe-8867-4882-9481-736f3fe69f43,unnamed,"""""""Light TODD seed: CMA-ES search with two policy restarts.""""""
+
+from collections.abc import Iterable
+from helper import (
+    ActionPool,
+    ActionSelection,
+    BaseEvaluator,
+    ExplorationScore,
+    FinalizationScore,
+    PolicyScores,
+    SamplingBudget,
+    SourcePool,
+    ToddSearch,
+    TohpeSearch,
+    ZBucketSearch,
+)
+import numpy as np
+from pymoo.algorithms.soo.nonconvex.cmaes import CMAES
+from pymoo.core.problem import ElementwiseProblem
+from pymoo.optimize import minimize
+
+OPTIMIZER_FAMILY = ""pymoo_cma_es_with_restarts""
+SEEDS = [29, 30]
+SCOUT_POINTS = 160
+REFINE_EVALS = 80
+REOPEN_MARGINS = [80, 36]
+LOWER_BOUND = -1.0
+UPPER_BOUND = 1.0
+
+
+def objective(ranks: list[int]) -> float:
+    values = np.asarray(ranks, dtype=float)
+    return float(values.min() + 0.02 * values.std())
+
+
+class Evaluator(BaseEvaluator):
+    def float_range(self, low: float, high: float) -> float:
+        return self.map_par(lambda x: low + (high - low) * np.clip((float(x) + 1.0) / 2.0, 0.0, 1.0))
+
+    def int_range(self, low: int, high: int) -> int:
+        return self.map_par(lambda x: int(round(low + (high - low) * np.clip((float(x) + 1.0) / 2.0, 0.0, 1.0))))
+
+    def policy_mapping(self):
+        exploration = ExplorationScore(
+            [self.float_range(-4, 4) for _ in range(5)], centers=[0.0, 0.0, 0.0, 0.0, 0.0], pow=1
+        )
+        finalization = FinalizationScore(
+            [self.float_range(-4, 4) for _ in range(6)],
+            centers=[0.0, 0.0, 0.0, self.float_range(0.0, 1.0), 0.0, 0.0],
+            pow=1,
+        )
+        self.set_scores(PolicyScores(exploration=exploration, final=finalization))
+        samples = SamplingBudget(
+            one_hot=20, sparse=self.int_range(4, 20), dense=self.int_range(4, 20), sparse_max_weight=3
+        )
+        self.set_action_selection(ActionSelection(beamwidth=2, mode=""softmax"", temperature=0.2))
+        self.set_action_pool(ActionPool(final_size=self.int_range(16, 36)))
+        self.set_tohpe_search(TohpeSearch(samples, SourcePool(keep=self.int_range(5, 14), reserve=1), z_choices=3))
+        self.set_todd_search(
+            ToddSearch(
+                SamplingBudget(one_hot=12, sparse=4, dense=4, sparse_max_weight=2),
+                SourcePool(keep=3, reserve=1),
+                actions_per_bucket=2,
+                buckets=ZBucketSearch(min_buckets=64, max_buckets=4096, limit_bucket=4096),
+            )
+        )
+
+    def __call__(self, params: Iterable[float]) -> float:
+        return objective(self.run(params, SEEDS))
+
+
+class Problem(ElementwiseProblem):
+    def __init__(self, evaluator: Evaluator):
+        dimensions = len(evaluator.extract_active())
+        super().__init__(
+            n_var=dimensions,
+            n_obj=1,
+            xl=np.full(dimensions, LOWER_BOUND),
+            xu=np.full(dimensions, UPPER_BOUND),
+        )
+        self.evaluator = evaluator
+
+    def _evaluate(self, x, out, *args, **kwargs):
+        out[""F""] = self.evaluator(np.asarray(x, dtype=float))
+
+
+def optimize_cma(evaluator: Evaluator, evaluations: int, seed: int, sigma: float) -> np.ndarray:
+    current = evaluator.extract_active()
+    if len(current) == 0:
+        evaluator([])
+        return current
+    result = minimize(
+        Problem(evaluator),
+        CMAES(x0=np.clip(current, LOWER_BOUND, UPPER_BOUND), sigma=sigma, pop_size=8, restarts=0),
+        termination=(""n_eval"", evaluations),
+        seed=seed,
+        verbose=False,
+    )
+    best = np.asarray(result.X if result.X is not None else current, dtype=float)
+    evaluator.insert(best)
+    evaluator.reinit()
+    return best
+
+
+def entrypoint():
+    evaluator = Evaluator(path_name=""init"", max_depth=500)
+    params = optimize_cma(evaluator, SCOUT_POINTS, seed=29, sigma=0.8)
+    for index, margin in enumerate(REOPEN_MARGINS):
+        restarted = evaluator.set_up_new_init(0, rank_thr=evaluator.best_rank + margin, xopt=params)
+        if restarted is None:
+            break
+        params = optimize_cma(evaluator, REFINE_EVALS, seed=30 + index, sigma=0.35)
+    return evaluator.get_best()",2026-08-03 19:52:28.294025+00:00,13,done,True,1,3,True,[],[],0,0,,1,initial_program,lean_scout_restart,/home/danilkafish/Projects/gigaevo-vartodd-private/.run_gf/islands_overlays/gf2_9_khor_lb137_ub165/vartodd_evo_gf_islands_gf2_9_khor/initial_programs/lean_scout_restart.py,139.47748467892353,96.884286,1.0,210.0,1.0,"## Program execution aux info
+
+path_summary:
+  depth=15 init_rank=210 final_rank=139 total_reduction=71
+  rank_trajectory=210 -> 203 -> 197 -> 191 -> ... -> 146 -> 144 -> 140 -> 139
+path_policy_groups:
+  g1 210->146 red=64 P1 s12 red:5.3(mx8) dim:4..30(m:15) src=H:95.2/T:590.7 pool:13.6(H10.7/T2.9) z:0 [T_dom]
+  g2 146->139 red=7 P1 s3 red:2.3(mx4) dim:1..3(m:2) src=H:11/T:43 pool:10.7(H7.7/T3) z:0 [T_dom] split=dim_lt5
+converged_policy_profiles:
+  P1 rank_region=210->146,146->139 search_shape=beamwidth:2/selection:softmax@0.2 pool=final:35/tohpe:11/1/todd:3/1 samples=tohpe:oh:20/sp:6/de:13/w:3/todd:oh:12/sp:4/de:4/w:2 tohpe_z_choices:3 z_buckets=todd:64..4096/4096 diversity=todd_actions_per_bucket:2 scores=pool=w[red:+3.913,dim:-2.979,bucket:-0.419,yw:-3.844,zw:+3.728];c[red:0,dim:0,bucket:0,yw:0,zw:0];p=1 final=w[red:+2.428,dim:+2.733,bucket:-2.975,yw:-3.03,zw:+1.848,tohpe:-0.265];c[red:0,dim:0,bucket:0,yw:+0.078,zw:0,tohpe:0];p=1
+search_stat:
+rank 0.9q=157.0 
+rank 0.1q=143.0 
+init=0/210: 2/141 -> 440/139
+last_improvement=440/139 total_evals=644 best_seen_times=2
+total_evals: 644
+best_seen_times: 2
+initial_rank: 210
+loaded_rank: 210
+this path name: f139_i210_555dfabe_z64of4096","## Program Metrics
+
+- fitness : 139.477 (Primary objective. rank + sum(P)/P.size() (P is the found decomposition).; ↓ better)
+- is_valid : 1 (Program validity (1 valid, 0 invalid); ↑ better)
+- runtime : 97 (Program runtime in seconds; ↑ better)
+
+---
+
+## Program execution aux info
+
+path_summary:
+  depth=15 init_rank=210 final_rank=139 total_reduction=71
+  rank_trajectory=210 -> 203 -> 197 -> 191 -> ... -> 146 -> 144 -> 140 -> 139
+path_policy_groups:
+  g1 210->146 red=64 P1 s12 red:5.3(mx8) dim:4..30(m:15) src=H:95.2/T:590.7 pool:13.6(H10.7/T2.9) z:0 [T_dom]
+  g2 146->139 red=7 P1 s3 red:2.3(mx4) dim:1..3(m:2) src=H:11/T:43 pool:10.7(H7.7/T3) z:0 [T_dom] split=dim_lt5
+converged_policy_profiles:
+  P1 rank_region=210->146,146->139 search_shape=beamwidth:2/selection:softmax@0.2 pool=final:35/tohpe:11/1/todd:3/1 samples=tohpe:oh:20/sp:6/de:13/w:3/todd:oh:12/sp:4/de:4/w:2 tohpe_z_choices:3 z_buckets=todd:64..4096/4096 diversity=todd_actions_per_bucket:2 scores=pool=w[red:+3.913,dim:-2.979,bucket:-0.419,yw:-3.844,zw:+3.728];c[red:0,dim:0,bucket:0,yw:0,zw:0];p=1 final=w[red:+2.428,dim:+2.733,bucket:-2.975,yw:-3.03,zw:+1.848,tohpe:-0.265];c[red:0,dim:0,bucket:0,yw:+0.078,zw:0,tohpe:0];p=1
+search_stat:
+rank 0.9q=157.0 
+rank 0.1q=143.0 
+init=0/210: 2/141 -> 440/139
+last_improvement=440/139 total_evals=644 best_seen_times=2
+total_evals: 644
+best_seen_times: 2
+initial_rank: 210
+loaded_rank: 210
+this path name: f139_i210_555dfabe_z64of4096
+
+---
+
+## Program Insights
+
+- **[scant_evaluation_budget][harmful][high]**  — anchor `runtime : 97` (metrics) | mechanism: 97s out of a 1800s per-program budget means the program used only ~5% of available wall time, leaving the search severely underevaluated. With total_evals=644 and last_improvement at eval 440, 204 dead evaluations followed by program termination before budget exhaustion indicate the optimizer saturated a basin, not that the landscape was thoroughly searched. | substitute: Raise SCOUT_POINTS from 160 to 800 and REFINE_EVALS from 80 to 400, increasing pop_size from 8 to 15 to match the larger budget and improve CMA-ES global search on the irregular landscape. | refs: total_evals=644, last_improvement=440/139, best_seen_times=2
+- **[marginal_convergence][fragile][high]**  — anchor `best_seen_times=2` (execution_evidence) | mechanism: The best rank 139 was seen only twice across 644 evaluations, meaning the optimizer reached the best solution in only 0.3% of trials. This is strong evidence that the optimizer is operating at the edge of the basin and that additional function evaluations with the same convergence pattern would yield little improvement. | substitute: Increase pop_size from 8 to 15 so the CMA-ES covariance matrix is estimated from a larger sample, improving robustness. Also increase restarts from 0 to 2 (CMAES sigma=0.35, restarts=2) to reinitialize from different starting points when convergence stalls. | refs: total_evals=644, last_improvement=440/139
+- **[restart_margin_misalignment][harmful][high]**  — anchor `REOPEN_MARGINS = [80, 36]` (program) | mechanism: With best_rank=139, margin=80 gives rank_thr=219, which exceeds init_rank=210. If set_up_new_init requires a path position with rank >= rank_thr, no such position exists (max rank on path is 210), causing the first restart to return None and the loop to break immediately, wasting the REFINE_EVALS budget. The path summary shows only one descent, no secondary branches. | substitute: Reduce margins to [36, 12] so rank_thr values (175, 151) are reachable within the path trajectory (210→139), ensuring restarts fire and consume their allocated evaluation budget. | refs: path_summary: depth=15 init_rank=210 final_rank=139, total_evals=644
+- **[todd_z_research_stuck_at_minimum][rigid][medium]**  — anchor `z64of4096` (execution_evidence) | mechanism: The path name encodes actual TODD z research of 64 against a configured max of 4096. The program sets min_buckets=64, max_buckets=4096, limit_bucket=4096, but actual research never exceeded the minimum. Despite both bands being TODD-dominant (T_dom), the policy fails to trigger deeper z research, likely because the fixed ToddSearch with actions_per_bucket=2 combined with SourcePool(keep=3, reserve=1) depletes the reserve quickly and terminates bucket research before exploring broadly. | substitute: Raise min_buckets from 64 to 256 and increase ToddSearch SourcePool keep from 3 to 8 with reserve=2, so TODD maintains more candidates and continues researching more z buckets before exhausting its reserve. Also raise actions_per_bucket from 2 to 4. | refs: converged_policy_profiles P1 z_buckets=todd:64..4096/4096, path_policy_groups g1 T_dom
+- **[temperature_too_low_for_diverse_trajectories][harmful][medium]**  — anchor `temperature=0.2` (program) | mechanism: With beamwidth=2 and softmax temperature=0.2, the selection is highly peaked on the two top-scored candidates. This compounds with best_seen_times=2: the policy almost always selects the same top actions, retreading the same narrow path and leaving alternative trajectories unexplored. | substitute: Raise temperature from 0.2 to 0.8 and increase beamwidth from 2 to 4. A wider beam with softer selection lets more diverse actions survive to scoring, increasing the chance of discovering better rank reductions. | refs: best_seen_times=2, converged_policy_profiles P1 search_shape=beamwidth:2/selection:softmax@0.2
+- **[pool_underfilled_in_todd_dominant_band][harmful][medium]**  — anchor `pool:13.6(H10.7/T2.9)` (execution_evidence) | mechanism: The configured final pool size range is 16-36 (int_range), but the actual retained pool in band g1 (210→146) is only 13.6 on average. This underfill means the policy generates fewer candidates than the capacity allows, limiting the diversity available for scoring and selection. | substitute: Increase ToddSearch SourcePool keep from 3 to 8 (to supply more TODD actions to the pool) and raise ExplorationScore weight on yw from its current negative value (-3.844) toward -1.0 to penalize high y-weight less harshly, since y-weight diversity drives action variety. | refs: converged_policy_profiles P1 pool=final:35/tohpe:11/1/todd:3/1, path_policy_groups g1 src=H:95.2/T:590.7
+- **[single_seed_initial_search][fragile][medium]**  — anchor `params = optimize_cma(evaluator, SCOUT_POINTS, seed=29, sigma=0.8)` (program) | mechanism: The initial scout run uses a single seed (29). With the irregular, non-convex landscape of rank optimization, a single stochastic CMA-ES trajectory can get trapped in a local basin. The two restarts use seeds 30 and 31, but if the first restart never fires (due to margin misalignment), only one trajectory is ever explored. | substitute: Run 3 independent scout trajectories with seeds [27, 29, 31], each with SCOUT_POINTS=320 and pop_size=12. Pick the best result. This multiplies basin exploration without needing restarts that rely on margin alignment. | refs: SEEDS = [29, 30], REOPEN_MARGINS = [80, 36], total_evals=644
+- **[early_tohpe_overprovisioned][neutral][low]**  — anchor `src=H:95.2/T:590.7` (execution_evidence) | mechanism: In band g1 (210→146), TOHPE accepts 95.2 actions but TODD accepts 590.7 actions, making TODD the dominant action source. However, TOHPE is configured with expensive sampling (one_hot=20, sparse=4-20, dense=4-20) that adds per-evaluation cost disproportionate to its 14% contribution. The TOHPE budget could be reallocated to more optimizer evaluations or deeper TODD research. | substitute: Reduce TOHPE one_hot from 20 to 8, sparse int_range(4,20) to int_range(2,8), dense int_range(4,20) to int_range(2,8). Reallocate saved cost to increase SCOUT_POINTS from 160 to 320. | refs: converged_policy_profiles P1 samples=tohpe:oh:20/sp:6/de:13/w:3, path_policy_groups g1 red:5.3(mx8) dim:4..30(m:15)
+
+---
+
+## Evolutionary Statistics
+
+This program: iter=3  gen=1  fitness=139.477 (rank 1/1 in window)
+Window: iters [-12..18]  programs=6  valid=1
+Trend (window): flat  [only 1 valid programs — too few for trend]
+Best in window: 139.477 at iter 3  (offset +0 from this program)
+Iters since last new best (global): 3
+Invalid streak (max consecutive in window): 6
+Recent failure rate: 6/6 invalid (100.0%)
+
+---
+
+## Execution Signal Digest
+final_rank=139  total_reduction=71  loaded_rank=210
+optimizer: best_seen_times=2  total_evals=644  rank_0.1q=143.0  rank_0.9q=157.0
+last_group: 146->139  z=0  dim=1..3(m:2)  src=H:11/T:43  pool=10.7(H7.7/T3)  flags=T_dom
+last_profile: P1  pool_final=35  actions_per_bucket=2
+reduction_by_group: 210->146:64  146->139:7
+frontier: 146->139 is TODD-driven; keep TODD recall, tune y/reserve before cutting z
+
+---
+
+## Program Aux Excerpt
+
+path_summary:
+  depth=15 init_rank=210 final_rank=139 total_reduction=71
+  rank_trajectory=210 -> 203 -> 197 -> 191 -> ... -> 146 -> 144 -> 140 -> 139
+
+path_policy_groups:
+  g1 210->146 red=64 P1 s12 red:5.3(mx8) dim:4..30(m:15) src=H:95.2/T:590.7 pool:13.6(H10.7/T2.9) z:0 [T_dom]
+  g2 146->139 red=7 P1 s3 red:2.3(mx4) dim:1..3(m:2) src=H:11/T:43 pool:10.7(H7.7/T3) z:0 [T_dom] split=dim_lt5
+
+converged_policy_profiles:
+  P1 rank_region=210->146,146->139 search_shape=beamwidth:2/selection:softmax@0.2 pool=final:35/tohpe:11/1/todd:3/1 samples=tohpe:oh:20/sp:6/de:13/w:3/todd:oh:12/sp:4/de:4/w:2 tohpe_z_choices:3 z_buckets=todd:64..4096/4096 diversity=todd_actions_per_bucket:2 scores=pool=w[red:+3.913,dim:-2.979,bucket:-0.419,yw:-3.844,zw:+3.728];c[red:0,dim:0,bucket:0,yw:0,zw:0];p=1 final=w[red:+2.428,dim:+2.733,bucket:-2.975,yw:-3.03,zw:+1.848,tohpe:-0.265];c[red:0,dim:0,bucket:0,yw:+0.078,zw:0,tohpe:0];p=1
+
+search_stat:
+rank 0.9q=157.0 
+rank 0.1q=143.0 
+init=0/210: 2/141 -> 440/139
+last_improvement=440/139 total_evals=644 best_seen_times=2
+total_evals: 644
+best_seen_times: 2
+initial_rank: 210
+loaded_rank: 210
+this path name: f139_i210_555dfabe_z64of4096"
