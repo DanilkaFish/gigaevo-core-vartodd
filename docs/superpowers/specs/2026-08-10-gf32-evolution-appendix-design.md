@@ -52,12 +52,26 @@ Introduce the first `T=1177` tuner in one short factual paragraph and retain
 only its condensed listing; remove the interpretive paragraph after it.
 Listing comments will attach evidence directly to the relevant choices:
 
-- Among the 30 valid programs ending at `T<=1179`, the realized finalization
-  weights were positive for reduction in 28/30 and TOHPE lookahead in 27/30,
-  negative for y-weight in 25/30, and positive for z-weight in 22/30. Thus the
-  listing will describe a negative y-weight bias, not a negative z-weight
-  bias; z-weight remains sign-flexible. These frequencies are inherited
-  associations rather than ablations.
+- Analyze the terminal finalization profile rendered in `metadata_aux_info`
+  for all 286 valid programs. The raw positive/negative median final T-counts
+  are: reduction 1199/1203, dimension 1199/1203, bucket 1203/1199, y-weight
+  1202/1201, z-weight 1199/1203, and TOHPE lookahead 1197/1203.
+- Control for starting-trajectory quality by using the 178 valid cached-path
+  programs and comparing positive and negative weights only among programs
+  that loaded the same exact path. The outcome is strict rank gain,
+  `loaded_path_rank - final_rank`. Averaged over mixed-sign path groups, with
+  each group weighted by the sizes of its two sign samples, positive reduction
+  has a 1.44-rank advantage, positive TOHPE lookahead a 0.74-rank advantage,
+  negative y-weight a 0.92-rank advantage, and negative bucket weight a
+  0.67-rank advantage. Dimension differs by only 0.13 ranks and z-weight by
+  0.13 ranks, so neither receives a fixed sign in the listing. Positive
+  reduction wins in 10/13 mixed-sign path groups, positive TOHPE in 10/18,
+  negative y-weight in 8/12, and negative bucket weight in 10/20.
+- Use these comparisons to explain the parameterization: reduction and TOHPE
+  lookahead are nonnegative, y-weight is nonpositive, bucket weight has more
+  negative than positive range, and dimension and z-weight remain
+  sign-flexible. State that same-path comparison controls the loaded baseline
+  but is still observational because programs changed other mechanisms too.
 - The terminal TOHPE threshold is 1210. On the returned `T=1177` path, the
   mean null-space dimension changed from 20.8 above 1210 to 8.0 and then 2.7
   below it. At dimension 2--3 there are only 3--7 nonzero y vectors, supporting
