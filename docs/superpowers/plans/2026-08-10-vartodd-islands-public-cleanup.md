@@ -169,58 +169,23 @@ git commit -m "feat: make islands the safe GF launcher"
 ### Task 2: Rewrite README Around The Islands API
 
 **Files:**
-- Create: `tests/test_readme_vartodd_islands.py`
 - Replace: `README.md`
 
 **Interfaces:**
 - Consumes: the actual launcher contract and `vartodd_evo_gf_islands_steady` defaults.
 - Produces: the sole public installation, API, operation, and troubleshooting guide.
 
-- [ ] **Step 1: Add a failing documentation contract test**
+- [ ] **Step 1: Record the obsolete README surface before replacement**
 
-```python
-from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
-
-def test_readme_documents_only_the_islands_launcher() -> None:
-    text = (ROOT / "README.md").read_text(encoding="utf-8")
-    required = [
-        "run_gf_islands.py", "vartodd_evo_gf_islands_steady",
-        "matrix=", "lb=", "ub=", "cache=", "call_timeout=",
-        "soft_timeout_grace=", "initial_programs=", "redis.resume=true",
-        "ab_initio", "mid_margin", "near_end",
-    ]
-    for value in required:
-        assert value in text
-    forbidden = [
-        "python run_gf.py", "problem.name=vartodd_evo ",
-        "problem.name=vartodd_gf32", "vartodd_evo_gf16_batch",
-        "vartodd_gf32_batch",
-    ]
-    for value in forbidden:
-        assert value not in text
-
-def test_readme_launcher_options_match_source() -> None:
-    readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    launcher = (ROOT / "run_gf_islands.py").read_text(encoding="utf-8")
-    for option in (
-        "matrix", "lb", "ub", "cache", "call_timeout",
-        "soft_timeout_grace", "initial_programs",
-    ):
-        assert f"{option}=" in readme
-        assert option in launcher
-```
-
-- [ ] **Step 2: Run the test and confirm the old README fails**
+Run:
 
 ```bash
-direnv exec . python -m pytest tests/test_readme_vartodd_islands.py -q
+rg -n "python run_gf.py|problem.name=vartodd_evo |problem.name=vartodd_gf32|vartodd_evo_gf16_batch|vartodd_gf32_batch" README.md
 ```
 
-Expected: failure because old batch problems are advertised and the islands API is incomplete.
+Expected: matches for the old batch and non-islands workflows. This is review evidence, not a permanent source-text test.
 
-- [ ] **Step 3: Replace `README.md` with the approved structure**
+- [ ] **Step 2: Replace `README.md` with the approved structure**
 
 Use these sections:
 
@@ -242,19 +207,20 @@ Use these sections:
 
 The API table must give required/default/meaning information for all seven options. Examples must cover numeric degree, exact filename, both alternate seed pools, cache disable, custom timeouts, six-worker concurrency, one-mutant smoke run, resume, and alternate Redis DB.
 
-- [ ] **Step 4: Run docs tests and inspect help**
+- [ ] **Step 3: Validate the documented surface against launcher help**
 
 ```bash
-direnv exec . python -m pytest tests/test_readme_vartodd_islands.py -q
 direnv exec . python run_gf_islands.py --help
+rg -n "matrix=|lb=|ub=|cache=|call_timeout=|soft_timeout_grace=|initial_programs=|redis.resume=true|ab_initio|mid_margin|near_end" README.md
+! rg -n "python run_gf.py|problem.name=vartodd_evo |problem.name=vartodd_gf32|vartodd_evo_gf16_batch|vartodd_gf32_batch" README.md
 ```
 
-Expected: tests pass and help matches the documented launcher options/default experiment.
+Expected: help and README expose the same seven launcher-only options and default experiment, all three regimes are explained, and obsolete public commands are absent.
 
-- [ ] **Step 5: Commit the README rewrite**
+- [ ] **Step 4: Commit the README rewrite**
 
 ```bash
-git add README.md tests/test_readme_vartodd_islands.py
+git add README.md
 git commit -m "docs: document the VarTODD islands workflow"
 ```
 
@@ -263,35 +229,22 @@ git commit -m "docs: document the VarTODD islands workflow"
 ### Task 3: Reduce problems/ To The Two Retained Sources
 
 **Files:**
-- Create: `tests/problems/test_vartodd_problem_layout.py`
 - Modify: `tests/problems/test_vartodd_live_paths.py`
 - Delete: every immediate `problems/` subdirectory except the two retained directories.
 
 **Interfaces:**
 - Consumes: the approved exact directory layout.
-- Produces: a filesystem invariant independent of git-ignore behavior.
+- Produces: exactly two retained problem directories plus live-path regression coverage against the surviving shared implementation.
 
-- [ ] **Step 1: Add the failing layout invariant**
-
-```python
-from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[2]
-
-def test_only_supported_vartodd_problem_directories_remain() -> None:
-    problem_dirs = {
-        path.name for path in (ROOT / "problems").iterdir() if path.is_dir()
-    }
-    assert problem_dirs == {"vartodd_evo_gf", "vartodd_evo_gf_islands"}
-```
-
-- [ ] **Step 2: Run the invariant and confirm it reports 24 extra directories**
+- [ ] **Step 1: Record the pre-cleanup directory count and names**
 
 ```bash
-direnv exec . python -m pytest tests/problems/test_vartodd_problem_layout.py -q
+find problems -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort
 ```
 
-- [ ] **Step 3: Retarget the old live-path regression test**
+Expected: 26 names: the two retained sources and 24 directories to delete.
+
+- [ ] **Step 2: Retarget the old live-path regression test**
 
 Replace both parameter lists in `tests/problems/test_vartodd_live_paths.py` with:
 
@@ -301,7 +254,7 @@ Replace both parameter lists in `tests/problems/test_vartodd_live_paths.py` with
 
 The island wrapper delegates to this implementation and already has dedicated path-store coverage.
 
-- [ ] **Step 4: Delete the exact out-of-scope directories**
+- [ ] **Step 3: Delete the exact out-of-scope directories**
 
 Delete only:
 
@@ -332,11 +285,13 @@ problems/vartodd_evo
 problems/vartodd_gf32
 ```
 
-- [ ] **Step 5: Run retained-source and layout tests**
+- [ ] **Step 4: Verify the directory invariant and run retained-source tests**
 
 ```bash
+test "$(find problems -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 2
+test -d problems/vartodd_evo_gf
+test -d problems/vartodd_evo_gf_islands
 direnv exec . python -m pytest \
-  tests/problems/test_vartodd_problem_layout.py \
   tests/problems/test_vartodd_live_paths.py \
   tests/problems/test_vartodd_gf_shared_source.py \
   tests/problems/test_vartodd_gf_islands_shared_source.py \
@@ -346,10 +301,10 @@ direnv exec . python -m pytest \
 
 Expected: all retained-source and layout tests pass.
 
-- [ ] **Step 6: Commit the problem cleanup**
+- [ ] **Step 5: Commit the problem cleanup**
 
 ```bash
-git add -A problems tests/problems/test_vartodd_live_paths.py tests/problems/test_vartodd_problem_layout.py
+git add -A problems tests/problems/test_vartodd_live_paths.py
 git commit -m "chore: remove unsupported problem payloads"
 ```
 
@@ -374,8 +329,6 @@ git commit -m "chore: remove unsupported problem payloads"
 direnv exec . python -m pytest \
   tests/test_tools/test_run_gf.py \
   tests/test_tools/test_run_gf_islands.py \
-  tests/test_readme_vartodd_islands.py \
-  tests/problems/test_vartodd_problem_layout.py \
   tests/problems/test_vartodd_live_paths.py \
   tests/problems/test_vartodd_gf_shared_source.py \
   tests/problems/test_vartodd_gf_islands_shared_source.py \
