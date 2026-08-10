@@ -185,24 +185,22 @@ class PathStore(_legacy.PathStore):
         return base
 
     def has_selectable_paths(self, *, route_id: str) -> bool:
-        _frontier_rank, pinned, records = self._selection_inventory(
+        _frontier_rank, _pinned, records = self._selection_inventory(
             route_id=route_id,
         )
-        return pinned is not None or bool(records)
+        return bool(records)
 
     def selectable_records(
         self,
         *,
         route_id: str,
-        top_k: int = 8,
+        top_k: int = 6,
         max_per_rank: int = 2,
-        frontier_nonimproved_limit: int = 6,
-        worse_nonimproved_limit: int = 4,
+        nonimproved_limit: int = 4,
     ) -> list[dict[str, Any]]:
         _frontier_rank, _pinned, records = self._selection_inventory(
             route_id=route_id,
-            frontier_nonimproved_limit=frontier_nonimproved_limit,
-            worse_nonimproved_limit=worse_nonimproved_limit,
+            nonimproved_limit=nonimproved_limit,
         )
         return self._bounded_records(
             records,
@@ -241,7 +239,7 @@ class PathStore(_legacy.PathStore):
         max_per_rank: int = 2,
         max_chars: int = 24_000,
     ) -> str:
-        frontier_rank, pinned, records = self._selection_inventory(
+        frontier_rank, _pinned, records = self._selection_inventory(
             route_id=route_id,
         )
         frontier_value = (
@@ -253,21 +251,6 @@ class PathStore(_legacy.PathStore):
         )
         cards: list[str] = []
         used_chars = len(header)
-        pinned_section = ""
-        if pinned is not None:
-            if route_id == "near_end":
-                assert frontier_rank is not None
-                pinned_card = self._render_near_end_card(
-                    pinned,
-                    frontier_rank=frontier_rank,
-                )
-            else:
-                pinned_card = self._render_mid_margin_record(pinned)
-            pinned_section = (
-                "## Pinned Best Long-Descent Path\n"
-                f"route={route_id} frontier_rank={frontier_value}\n\n"
-                f"{pinned_card}\n\n"
-            )
         selected = self._bounded_records(
             records,
             top_k=top_k,
@@ -287,11 +270,7 @@ class PathStore(_legacy.PathStore):
                 continue
             cards.append(card)
             used_chars += separator + len(card)
-        return (
-            pinned_section
-            + header
-            + ("\n\n".join(cards) if cards else "- none")
-        )
+        return header + ("\n\n".join(cards) if cards else "- none")
 
     def update_evidence_card(
         self,
@@ -344,12 +323,75 @@ class PathStore(_legacy.PathStore):
                 continue
         return -1
 
+    @classmethod
+    def _child_branch_margin(cls, record: dict[str, Any]) -> int:
+        """Return the margin used when this child reopened its parent path.
+
+        ``parent_init_rank_thr`` is the exact threshold derived from the
+        child's ``Evaluator(..., margin=...)`` call.  The remaining fields are
+        compatibility fallbacks for older saved records.
+        """
+        try:
+            parent_rank = int(record.get("parent_loaded_rank"))
+        except (TypeError, ValueError):
+            return -1
+        for key in (
+            "parent_init_rank_thr",
+            "parent_loaded_start_rank",
+            "init_rank_thr",
+        ):
+            try:
+                start_rank = record.get(key)
+                if start_rank is not None:
+                    return int(start_rank) - parent_rank
+            except (TypeError, ValueError):
+                continue
+        return -1
+
+    @classmethod
+    def _canonicalize_sibling_paths(
+        cls,
+        records: Sequence[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Keep at most one direct child for each saved parent path.
+
+        Siblings are alternative attempts to refine the same parent, not
+        independent path hypotheses.  The canonical child is the one with the
+        lowest final rank; tied ranks prefer the larger reopening margin.
+        Canonicalization happens before route-specific failure filtering so a
+        retired canonical child cannot be replaced by a weaker sibling.
+        Ab-initio roots have no saved parent and remain independent.
+        """
+        roots: list[dict[str, Any]] = []
+        best_child_by_parent: dict[str, dict[str, Any]] = {}
+        for record in records:
+            parent_name = record.get("parent_path_name")
+            if not isinstance(parent_name, str) or not parent_name:
+                roots.append(record)
+                continue
+            current = best_child_by_parent.get(parent_name)
+            candidate_key = (
+                int(record["rank"]),
+                -cls._child_branch_margin(record),
+                str(record["name"]),
+            )
+            if current is None:
+                best_child_by_parent[parent_name] = record
+                continue
+            current_key = (
+                int(current["rank"]),
+                -cls._child_branch_margin(current),
+                str(current["name"]),
+            )
+            if candidate_key < current_key:
+                best_child_by_parent[parent_name] = record
+        return roots + list(best_child_by_parent.values())
+
     def _selection_inventory(
         self,
         *,
         route_id: str,
-        frontier_nonimproved_limit: int = 6,
-        worse_nonimproved_limit: int = 4,
+        nonimproved_limit: int = 4,
     ) -> tuple[
         int | None,
         dict[str, Any] | None,
@@ -357,58 +399,35 @@ class PathStore(_legacy.PathStore):
     ]:
         if route_id not in REFINEMENT_ROUTES:
             raise ValueError(f"unsupported refinement route: {route_id!r}")
-        common: list[dict[str, Any]] = []
+        normalized: list[dict[str, Any]] = []
         for source_record in self.iter_path_records():
-            origin = self._origin(source_record)
-            if origin is None or source_record.get("is_stale_improved_child"):
-                continue
             try:
                 rank = int(source_record["rank"])
             except (KeyError, TypeError, ValueError):
                 continue
             record = dict(source_record)
             record["rank"] = rank
+            normalized.append(record)
+
+        common: list[dict[str, Any]] = []
+        for record in self._canonicalize_sibling_paths(normalized):
+            origin = self._origin(record)
+            if origin is None or record.get("is_stale_improved_child"):
+                continue
             record["origin"] = origin
             common.append(record)
         if not common:
             return None, None, []
 
         frontier_rank = min(int(record["rank"]) for record in common)
-        pinned = min(
-            (
-                record
-                for record in common
-                if int(record["rank"]) == frontier_rank
-            ),
-            key=lambda record: (
-                -self._path_init_rank(record),
-                int(
-                    self._route_stats(record, route_id).get(
-                        "used_count",
-                        0,
-                    )
-                    or 0
-                ),
-                str(record["name"]),
-            ),
-        )
         eligible: list[dict[str, Any]] = []
         for record in common:
-            if record is pinned:
-                continue
             rank = int(record["rank"])
             stats = self._route_stats(record, route_id)
             failures = int(stats.get("nonimproved_count") or 0)
-            failure_limit = (
-                int(frontier_nonimproved_limit)
-                if rank == frontier_rank
-                else int(worse_nonimproved_limit)
-            )
-            if failures >= max(0, failure_limit):
+            if failures >= max(0, int(nonimproved_limit)):
                 continue
             if route_id == "near_end":
-                if rank > frontier_rank + 4:
-                    continue
                 best_child = stats.get("best_child_rank")
                 if (
                     rank > frontier_rank
@@ -436,7 +455,7 @@ class PathStore(_legacy.PathStore):
                 str(record["name"]),
             )
         )
-        return frontier_rank, pinned, eligible
+        return frontier_rank, None, eligible
 
     def _render_near_end_card(
         self,

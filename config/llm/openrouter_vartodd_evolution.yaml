@@ -60,8 +60,7 @@ llm_mutation:
       max_tokens: 15192
       base_url: https://openrouter.ai/api/v1
       request_timeout: ${request_timeout}
-
-  probabilities: [0.8, 0.2]
+  probabilities: [0.7, 0.3]
 
 llm_insights:
   _target_: gigaevo.llm.models.MultiModelRouter
@@ -84,8 +83,7 @@ llm_insights:
       max_tokens: 16288
       base_url: https://openrouter.ai/api/v1
       request_timeout: ${request_timeout}
-
-  probabilities: [0.60, 0.40]
+  probabilities: [0.50, 0.50]
 
 llm_lineage:
   _target_: gigaevo.llm.models.MultiModelRouter
@@ -108,4 +106,4 @@ llm_lineage:
       max_tokens: 15288
       base_url: https://openrouter.ai/api/v1
       request_timeout: ${request_timeout}
-  probabilities: [0.60, 0.40]
+  probabilities: [0.40, 0.60]

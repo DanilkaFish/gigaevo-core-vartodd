@@ -12,8 +12,10 @@ Success means a final rank strictly below `loaded_path_rank`; equal rank is
 failure even with a lower TODD cap or shorter runtime.
 
 The inventory states the current frontier once, followed by exact path name,
-final rank, and origin. Default to a frontier-rank path. A higher-rank path is
-justified only by a concrete alternative-prefix hypothesis whose target is
+final rank, and origin. All displayed paths have the same route-local failure
+allowance; frontier paths receive no permanent placement or retirement
+exception. Choose from the displayed evidence. A higher-rank path is useful
+when it supports a concrete alternative-prefix hypothesis whose target is
 below the inventory frontier. Branch before the inherited failure band, not
 inside the already-collapsed tail.
 

@@ -10,7 +10,9 @@ Read the inventory before choosing the path. Its header gives
 the path rank, origin, depth, kind/restart band, near-end route usage, best
 child rank, policy bands/profiles, and producer-search yield. The route counter
 `near u/i/f` means valid near-end uses, improvements, and non-improvements;
-invalid or hard-timeout executions are not included.
+invalid or hard-timeout executions are not included. All displayed paths have
+the same route-local failure allowance; frontier paths are not pinned or exempt
+from retirement.
 
 For example:
 
@@ -19,11 +21,10 @@ frontier_rank=391; rank=391; near u/i/f=4/0/4; best_child_rank=391
 ```
 
 This says four valid near-end attempts loaded a frontier path and none beat it.
-Use the second same-rank card or materially change action generation and
-trajectory traversal; do not replay the same terminal policy. Above-frontier
-cards are at most four ranks above the frontier and exist only as alternative
-descents. Once one has reproduced the frontier in near-end, it is removed from
-this inventory.
+Use another card or materially change action generation and trajectory
+traversal; do not replay the same terminal policy. Above-frontier cards may be
+any distance above the frontier and represent alternative descents. Once one
+has reproduced the frontier in near-end, it is removed from this inventory.
 
 Small margins often produce broad plateaus because many parameter vectors map
 to the same inherited tail. The quality-first objective is to research the

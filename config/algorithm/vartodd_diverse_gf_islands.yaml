@@ -141,7 +141,7 @@ islands:
 
   - _target_: gigaevo.evolution.strategies.map_elites.IslandConfig
     island_id: near_end
-    max_size: 20
+    max_size: 35
     behavior_space: ${near_end_behavior_space}
     archive_selector:
       _target_: custom.archive_selectors.RankAwareRetentionSelector
@@ -177,7 +177,7 @@ evolution_strategy:
   bootstrap_source_island: ab_initio
   bootstrap_until_size: 8
   bootstrap_mix_probability: 0.70
-  steady_mix_probability: 0.10
+  steady_mix_probability: 0.35
   route_context_provider: ${ref:vartodd_islands_route_context}
   mutation_routes:
     - regime_id: ab_initio
