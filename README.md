@@ -1,382 +1,292 @@
-# GigaEvo VarTODD Fork
+# GigaEvo VarTODD Islands
 
-This repository is a public, VarTODD-focused fork of GigaEvo. It keeps the
-GigaEvo execution engine and adds the minimal custom pipeline, configs, prompts,
-and problem payloads needed to evolve VarTODD search programs.
+This repository evolves Python search programs for VarTODD matrix
+decomposition. An LLM mutates candidate programs, the native `pyvartodd`
+extension executes them, and a three-island MAP-Elites strategy retains diverse
+search logic while sharing useful saved paths.
 
-The fork is not meant to expose every upstream GigaEvo example. The runnable
-experiments here are:
+`run_gf_islands.py` is the supported launcher. It selects a matrix, creates an
+isolated runtime problem overlay, and starts the fixed
+`vartodd_evo_gf_islands_steady` experiment.
 
-- `vartodd_evo`: the current GF(2^7) through GF(2^16) VarTODD evolution target.
-- `vartodd_gf32`: the GF(2^32) VarTODD target.
+## How The Three-Island Search Works
 
-Each evolved program is Python code that builds a VarTODD/FastTODD search
-strategy. The program chooses score shapes, source pools, TOHPE/TODD budgets,
-restart schedules, saved-path loading, and refinement behavior. GigaEvo mutates
-that program with an LLM, executes it through the native `pyvartodd` extension,
-validates the produced path, and keeps diverse candidates with MAP-Elites.
+Each mutation is assigned to one of three regimes before its parents are
+selected:
+
+- `ab_initio` starts from the input matrix and develops a fresh decomposition.
+  It receives no saved-path inventory.
+- `mid_margin` loads a selectable saved path and branches with enough earlier
+  context to search for a different descent.
+- `near_end` loads a selectable saved path and concentrates on its difficult
+  inherited tail.
+
+Each regime has its own MAP-Elites archive. The two refinement islands read the
+same evidence-rich Path Store, so an improvement found by one search can become
+a starting point for later searches without collapsing the three parent
+populations into one archive.
 
 ## Repository Layout
 
-- `problems/vartodd_evo/`: GF(2^7) through GF(2^16) problem code, prompts,
-  metrics, and seed programs.
-- `problems/vartodd_gf32/`: GF(2^32) problem code, prompts, metrics, and seed
-  programs.
-- `config/experiment/vartodd_evo_gf16_batch.yaml`: recommended GF(2^16) batch
+The `problems/` directory intentionally contains exactly two source packages:
+
+- `problems/vartodd_evo_gf/` provides the shared evaluator, VarTODD helper API,
+  validator, metrics template, and seed portfolios.
+- `problems/vartodd_evo_gf_islands/` provides island routing, prompts, variant
+  resolution, and the shared Path Store interface.
+
+The launcher composes those packages into a generated matrix-specific overlay;
+neither source directory needs to be copied or edited for a normal run.
+
+Other important paths are:
+
+- `run_gf_islands.py`: supported command-line launcher.
+- `config/experiment/vartodd_evo_gf_islands_steady.yaml`: steady-state runtime
   preset.
-- `config/experiment/vartodd_gf32_batch.yaml`: recommended GF(2^32) batch
-  preset.
-- `config/pipeline/vartodd_pipeline.yaml`: VarTODD DAG stages and execution
-  timeout policy.
-- `config/algorithm/vartodd_diverse_gf16.yaml`: MAP-Elites and mutation-regime
-  config for `vartodd_evo`.
-- `config/algorithm/vartodd_diverse_gf32.yaml`: MAP-Elites and mutation-regime
-  config for `vartodd_gf32`.
-- `config/llm/openrouter_vartodd_evolution.yaml`: OpenRouter model routing for
-  mutation, insights, and lineage.
-- `custom/`: VarTODD-specific stages and the batch evolution engine.
-- `npy/`: tracked matrix inputs loaded by the helper code when running from the
-  repository root.
-- `scripts/install_pyvartodd.sh`: builds and installs the native `pyvartodd`
-  extension into `pyvartodd/Release/`.
+- `config/algorithm/vartodd_diverse_gf_islands.yaml`: the three archives,
+  routing probabilities, and bootstrap behavior.
+- `config/pipeline/vartodd_islands_pipeline.yaml`: evaluation and island-context
+  DAG.
+- `custom/vartodd_islands_context.py`: route context, statistics, and path-card
+  enrichment.
+- `npy/`: input matrices.
+- `evolution_results/<circuit>/`: curated final matrix and `evolution.csv` for
+  each completed circuit.
+- `scripts/install_pyvartodd.sh`: native extension installer.
 
-The experiment name describes the preset, but the actual target circuit/matrix
-is selected in each problem's `helper.py`. Check `DEFAULT_MATRIX_PATH` there
-before starting a run or when retargeting the problem to another matrix.
+## Requirements And Installation
 
-## Requirements
+You need:
 
-- Python 3.11+ for GigaEvo. Python 3.12 is the tested environment for the
-  current VarTODD runs.
-- Redis.
-- CMake 3.20+.
-- A C++ compiler with C++23 support.
-- An OpenRouter-compatible API key in `OPENAI_API_KEY`.
-- VarTODD native build dependencies available to CMake.
+- Python 3.11 or newer (Python 3.12 is the tested environment);
+- Redis;
+- CMake 3.20 or newer;
+- a compiler with C++23 support;
+- the native VarTODD build dependencies available to CMake;
+- an OpenRouter-compatible API key.
 
-Install the Python package:
+Install the package and, when needed, its test dependencies:
 
 ```bash
 python -m pip install -e .
-```
-
-For tests, install the test extra:
-
-```bash
 python -m pip install -e ".[test]"
 ```
 
 ## Build `pyvartodd`
 
-The VarTODD Python extension is not committed. Build it from VarTODD with:
+Build and install the native extension into `pyvartodd/Release/`:
 
 ```bash
 scripts/install_pyvartodd.sh
 ```
 
-By default the script clones:
-
-```text
-https://github.com/DanilkaFish/VarTodd.git
-```
-
-from branch:
-
-```text
-no-data-scripts
-```
-
-and installs:
-
-```text
-pyvartodd/Release/pyvartodd*.so
-pyvartodd/Release/libcnpy++.so
-```
-
-The installer uses the active `python` unless `PYTHON` is set, so it does not
-force a Python version:
+By default, the installer clones the `no-data-scripts` branch of
+`https://github.com/DanilkaFish/VarTodd.git`. It uses the active `python`; set
+`PYTHON` to build for a particular environment:
 
 ```bash
-PYTHON=/home/danilkaf/pyenv/metaevolve312/bin/python scripts/install_pyvartodd.sh
+PYTHON=/path/to/python scripts/install_pyvartodd.sh
 ```
 
-Useful overrides:
+Useful build overrides include:
 
 ```bash
 VARTODD_SOURCE_DIR=/path/to/VarTodd scripts/install_pyvartodd.sh
 VARTODD_REPO_URL=git@github.com:DanilkaFish/VarTodd.git scripts/install_pyvartodd.sh
 VARTODD_BRANCH=no-data-scripts scripts/install_pyvartodd.sh
-VARTODD_UPDATE=1 scripts/install_pyvartodd.sh
-VARTODD_BUILD_JOBS=16 scripts/install_pyvartodd.sh
-VARTODD_WITH_STUBS=ON scripts/install_pyvartodd.sh
+VARTODD_UPDATE=1 VARTODD_BUILD_JOBS=16 scripts/install_pyvartodd.sh
 ```
 
-If the extension is installed somewhere else, point the problem helpers to it:
+If the extension is installed elsewhere, expose that directory at runtime:
 
 ```bash
-VARTODD_PYVARTODD_DIR=/path/to/pyvartodd/Release python run.py ...
+VARTODD_PYVARTODD_DIR=/path/to/pyvartodd/Release \
+  python run_gf_islands.py matrix=16 lb=380 ub=421
 ```
 
-## Configure Credentials
+## Configure OpenRouter
 
-Create `.env` or export the variable in your shell:
+Create `.env` in the repository root or export the key in your shell:
 
 ```bash
-OPENAI_API_KEY=<your-openrouter-api-key>
+export OPENAI_API_KEY="your-openrouter-api-key"
 ```
 
-The configured OpenRouter preset currently routes:
+The launcher uses `config/llm/openrouter_vartodd_evolution.yaml`. Edit that
+file to change model routing or supply normal Hydra overrides for settings the
+config exposes.
 
-- mutation calls through DeepSeek V4 Flash and GPT-5 Mini;
-- insights through GPT-5 Mini and DeepSeek V4 Flash;
-- lineage through a colder GPT-5 Mini/DeepSeek V4 Flash mix.
+## Start Redis
 
-Edit `config/llm/openrouter_vartodd_evolution.yaml` if you want different
-models or probabilities.
-
-## Run Evolution
-
-Start Redis:
+Start a local Redis server before launching evolution:
 
 ```bash
 redis-server
 ```
 
-Run the current GF(2^16) VarTODD experiment:
+The default connection is `localhost:6379`, database `0`. Connection settings
+can be forwarded as Hydra overrides such as `redis.host=...`, `redis.port=...`,
+or `redis.db=...`.
 
-```bash
-python run.py problem.name=vartodd_evo experiment=vartodd_evo_gf16_batch
+## Launcher API
+
+```text
+python run_gf_islands.py matrix=<degree|filename.npy> lb=<rank> ub=<rank> [options] [Hydra overrides]
 ```
 
-Run the GF(2^32) experiment:
+| Argument | Required/default | Meaning |
+| --- | --- | --- |
+| `matrix` | required | Positive GF degree when exactly one `npy/gf2^<degree>_*.npy` matches, or an exact filename under `npy/`. |
+| `lb` | required | Lower fitness bound and target final rank. |
+| `ub` | required | Upper fitness bound and failure sentinel; must be greater than `lb`. |
+| `cache` | `true` | Cache initial-program executions. Use `false` to evaluate every seed again. |
+| `call_timeout` | `3800` | Hard timeout in seconds for one candidate evaluation. |
+| `soft_timeout_grace` | `200` | Non-negative grace subtracted from the hard timeout to form the cooperative soft deadline. |
+| `initial_programs` | `default` | Seed portfolio: `default`, `best`, or `expensive`. |
+
+Every other argument is forwarded unchanged to `run.py` as a Hydra override.
+The launcher supplies `experiment=vartodd_evo_gf_islands_steady` automatically.
+An explicit different experiment is rejected, as are overrides of the
+launcher-owned `problem.name`, `problem.dir`, `redis.prefix`, and
+`initial_exec_cache_dir` values.
+
+Run `python run_gf_islands.py --help` for the compact command reference.
+
+## Run A Fresh Evolution
+
+This GF(2^16) example uses the curated `best` seeds, disables seed-cache reuse,
+and keeps six candidate evaluations in flight:
 
 ```bash
-python run.py problem.name=vartodd_gf32 experiment=vartodd_gf32_batch
-```
-
-Use INFO-level console/file logs instead of the default DEBUG logging:
-
-```bash
-python run.py problem.name=vartodd_evo experiment=vartodd_evo_gf16_batch logging.level=INFO
-```
-
-The `vartodd_evo_gf16_batch` preset expands to the same core choices as:
-
-```bash
-python run.py problem.name=vartodd_evo \
-  pipeline=vartodd_pipeline \
-  algorithm=vartodd_diverse_gf16 \
-  llm=openrouter_vartodd_evolution \
-  evolution=batch \
-  num_parents=2
-```
-
-For a short smoke run:
-
-```bash
-python run.py problem.name=vartodd_evo experiment=vartodd_evo_gf16_batch \
-  max_generations=1 \
-  max_mutations_per_generation=1 \
-  max_concurrent_dags=1 \
+python run_gf_islands.py \
+  matrix=16 lb=380 ub=421 \
+  initial_programs=best cache=false \
+  max_concurrent_dags=6 max_in_flight=6 \
+  runner_config.prefetch_factor=1 \
   logging.level=INFO
 ```
 
-Even a smoke run can take time if the initial-program execution cache is cold.
-
-## Actual Batch Defaults
-
-The VarTODD presets use `config/evolution/batch.yaml`.
-
-Default batch settings:
-
-- `num_parents=2`
-- `max_elites_per_generation=10`
-- `max_mutations_per_generation=16`
-- `max_concurrent_dags=8`
-- `prefetch_factor=0`
-- `prefetch_extra=0`
-
-The batch engine selects parent combinations, creates a generation of mutants,
-waits for their DAG evaluations, ingests the results, refreshes the archive, and
-then starts the next generation.
-
-Operational overrides are normal Hydra overrides:
+The experiment already defaults to six concurrent DAGs, six in-flight
+mutations, strict in-flight accounting, two parents, and prefetch factor 1, so
+the minimal equivalent command is:
 
 ```bash
-python run.py problem.name=vartodd_evo experiment=vartodd_evo_gf16_batch \
-  max_concurrent_dags=4 \
-  max_mutations_per_generation=8 \
-  redis.db=1 \
-  logging.level=INFO
+python run_gf_islands.py matrix=16 lb=380 ub=421
 ```
 
-## Execution Semantics
-
-`config/pipeline/vartodd_pipeline.yaml` runs this high-level DAG:
-
-1. Validate Python code syntax and basic safety.
-2. Execute `entrypoint()` through `CachedCallProgramFunction`.
-3. Validate the returned VarTODD payload with `validate.py`.
-4. Split validator output into numeric metrics and non-metric aux text.
-5. Add runtime and complexity metrics.
-6. Ensure sentinel metrics exist for failed programs.
-7. Build insights, lineage summaries, execution digests, evolutionary statistics,
-   and mutation context.
-
-Candidate execution for `vartodd_evo` uses:
-
-- hard timeout: `3200` seconds;
-- soft timeout grace: `200` seconds;
-- effective soft deadline: about `3000` seconds after stage start.
-
-The `vartodd_gf32_batch` experiment overrides that policy:
-
-- hard timeout: `13200` seconds;
-- soft timeout grace: `1200` seconds;
-- effective soft deadline: about `12000` seconds after stage start.
-
-The helper checks `GIGAEVO_EXEC_SOFT_DEADLINE_EPOCH`. If the program reaches that
-deadline, it raises `GracefulEvaluationTimeout`. The executor then asks
-`helper.get_active_evaluator_best()` for the best completed payload and returns
-that salvaged result when available. The hard timeout still kills programs that
-do not stop cleanly.
-
-Only initial programs use the persistent execution cache by default:
-
-```text
-problems/<problem>/initial_programs/.exec_cache/
-```
-
-This cache is keyed by the program code and `helper.py`. It avoids re-running
-expensive seeds across fresh Redis runs. Mutants are not cached by default.
-Delete the cache directory to force seed re-evaluation.
-
-## Metrics And Selection
-
-Both VarTODD problems minimize `fitness`.
-
-For `vartodd_evo`, fitness is:
-
-```text
-rank + mean(P)
-```
-
-where `P` is the found decomposition.
-
-For `vartodd_gf32`, fitness also includes shaping around saved-path reuse and
-effective TODD bucket limits. Rank differences are intended to dominate that
-shaping.
-
-MAP-Elites uses a behavior space over:
-
-- primary fitness;
-- runtime;
-- `loaded_rank`;
-- validity.
-
-`loaded_rank` is a strategy descriptor. It separates ab-initio programs from
-saved-path refiners by the rank they started from or branched from; it is not a
-separate objective.
-
-## Redis, Resume, And Fresh Runs
-
-Redis stores programs, metrics, stage results, lineage, and engine state under
-the problem key prefix.
-
-If Redis already contains data and `redis.resume=false`, the run refuses to
-start. Choose one of these:
+Use the heavier seed portfolio when the additional initial evaluation cost is
+appropriate:
 
 ```bash
-# Continue the same run.
-python run.py problem.name=vartodd_evo experiment=vartodd_evo_gf16_batch redis.resume=true
-
-# Start isolated in another Redis DB.
-python run.py problem.name=vartodd_evo experiment=vartodd_evo_gf16_batch redis.db=1
-
-# Delete DB 0 and start over.
-redis-cli -n 0 FLUSHDB
+python run_gf_islands.py \
+  matrix=16 lb=380 ub=421 initial_programs=expensive
 ```
 
-Pressing Ctrl-C asks the evolution engine and DAG runner to stop. Active
-executor workers are killed so native VarTODD searches should not keep computing
-after shutdown.
+Use custom hard and soft timeouts for unusually expensive matrices. Here the
+cooperative deadline is approximately 12,000 seconds:
 
-## Outputs
+```bash
+python run_gf_islands.py \
+  matrix=32 lb=1150 ub=1250 \
+  call_timeout=13200 soft_timeout_grace=1200
+```
 
-Hydra writes each run under:
+For a one-mutant smoke run:
+
+```bash
+python run_gf_islands.py \
+  matrix=16 lb=380 ub=421 max_mutants=1 \
+  max_concurrent_dags=1 max_in_flight=1 \
+  runner_config.prefetch_factor=1 logging.level=INFO
+```
+
+Initial seeds are loaded before mutants, so a smoke run can still be expensive
+when its seed cache is cold.
+
+## Resume Or Isolate A Run
+
+Resume with the same matrix, bounds, and seed portfolio that created the Redis
+state:
+
+```bash
+python run_gf_islands.py \
+  matrix=16 lb=380 ub=421 initial_programs=best redis.resume=true
+```
+
+Start an independent run in another Redis database:
+
+```bash
+python run_gf_islands.py \
+  matrix=16 lb=380 ub=421 initial_programs=best redis.db=1
+```
+
+Without `redis.resume=true`, the launcher refuses to reuse a non-empty
+namespace. To intentionally erase an entire Redis database before a fresh run,
+use `redis-cli -n <db> FLUSHDB`; this removes every key in that database.
+
+Ctrl-C requests an orderly stop of the evolution engine and DAG runner and
+shuts down active executor workers.
+
+## Matrix Selection Examples
+
+A numeric degree is convenient when it has exactly one matching input:
+
+```bash
+python run_gf_islands.py matrix=16 lb=380 ub=421
+```
+
+When several matrices share a degree, or for a named circuit, pass the exact
+filename under `npy/`:
+
+```bash
+python run_gf_islands.py "matrix=gf2^8_khor.npy" lb=120 ub=150
+python run_gf_islands.py matrix=adder_8.qc.matrix.npy lb=110 ub=140
+```
+
+The launcher derives a safe matrix ID from exact filenames. A missing file or
+an ambiguous numeric degree fails before evolution starts.
+
+## Runtime Files And Curated Results
+
+For each invocation, the launcher generates:
+
+- a composed problem overlay below `.run_gf/islands_overlays/`;
+- an initial-program cache below `.run_gf/islands_cache/<matrix-id>/`, separated
+  by non-default seed portfolio;
+- a matrix-specific Redis prefix such as `vartodd_evo_gf_islands16`;
+- a shared saved-path store such as `data_gf_islands16/path_backups/`;
+- Hydra logs and run artifacts below `outputs/<date>/<time>/`.
+
+Only initial programs use the persistent execution cache. `cache=false`
+disables reads and writes for that invocation; it does not delete an existing
+cache.
+
+Candidate execution receives a cooperative soft deadline at
+`call_timeout - soft_timeout_grace`. A program that observes the deadline can
+return its best completed decomposition; the hard timeout remains the final
+limit for code that does not stop cleanly.
+
+Curated results use one directory per circuit:
 
 ```text
-outputs/<date>/<time>/
+evolution_results/<circuit>/
+├── <circuit>_<final-rank>.npy
+└── evolution.csv
 ```
 
-Important local runtime artifacts:
-
-- `outputs/`: Hydra logs and run outputs.
-- `data/path_backups/`: live saved VarTODD paths used by mutation context.
-- `problems/*/initial_programs/.exec_cache/`: initial-program execution cache.
-- `pyvartodd/Release/`: native extension built by `scripts/install_pyvartodd.sh`.
-
-These runtime directories are ignored by git. The root `npy/` matrix directory
-is tracked and required for normal runs from the repository root.
+The `.npy` file is the selected final decomposition and `evolution.csv` records
+the corresponding best evolution trace.
 
 ## Troubleshooting
 
-If `pyvartodd` cannot be imported, build it:
-
-```bash
-scripts/install_pyvartodd.sh
-```
-
-If `libcnpy++.so` is missing or cannot be loaded, rebuild and confirm it exists
-next to the extension:
-
-```text
-pyvartodd/Release/libcnpy++.so
-```
-
-If Redis is not empty:
-
-```bash
-python run.py problem.name=vartodd_evo experiment=vartodd_evo_gf16_batch redis.resume=true
-```
-
-or use a different Redis DB:
-
-```bash
-python run.py problem.name=vartodd_evo experiment=vartodd_evo_gf16_batch redis.db=1
-```
-
-If initial programs keep reusing stale results, delete:
-
-```text
-problems/vartodd_evo/initial_programs/.exec_cache/
-```
-
-or disable the cache for a run:
-
-```bash
-python run.py problem.name=vartodd_evo experiment=vartodd_evo_gf16_batch initial_exec_cache_dir=null
-```
-
-If logs are too verbose:
-
-```bash
-python run.py problem.name=vartodd_evo experiment=vartodd_evo_gf16_batch logging.level=INFO
-```
-
-## Notes For Fork Maintenance
-
-Keep VarTODD-specific changes scoped to:
-
-- `problems/vartodd_evo/`
-- `problems/vartodd_gf32/`
-- `config/experiment/vartodd_*`
-- `config/algorithm/vartodd_*`
-- `config/pipeline/vartodd_pipeline.yaml`
-- `config/llm/openrouter_vartodd_evolution.yaml`
-- `custom/`
-- `scripts/install_pyvartodd.sh`
-- executor fixes needed for soft-deadline salvage and clean shutdown.
-
-Avoid committing generated run outputs, local path backups, native build
-artifacts, or old copied experiment folders.
+- **`expected one ... matrix ... found N`**: use the exact `.npy` filename
+  instead of a numeric degree.
+- **Redis namespace is not empty**: add `redis.resume=true`, choose another
+  `redis.db`, or deliberately flush the database.
+- **`pyvartodd` cannot be imported**: rebuild it with the same Python used to
+  launch GigaEvo, or set `VARTODD_PYVARTODD_DIR`.
+- **Seeds take a long time**: keep the default `cache=true` after the first
+  successful evaluation, or select a lighter seed portfolio.
+- **A launcher-owned override is rejected**: remove it. Matrix-specific
+  problem paths, cache paths, and Redis prefixes are generated together to
+  keep the overlay consistent.
