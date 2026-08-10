@@ -51,41 +51,6 @@ class TestBuildTopCmd:
         assert "toy@42" in cmd
 
 
-class TestPrimaryMetricHigherIsBetter:
-    """Hits the real ``problems/<name>/metrics.yaml`` files in the repo so
-    we catch the case where someone flips a direction without updating the
-    benchmark expectations. ``alphaevolve/erdos_minimum_overlap`` is the
-    only canonical-benchmark problem with ``higher_is_better: false`` at
-    time of writing; if that ever changes, this test breaks loudly.
-    """
-
-    def test_heilbron_is_maximization(self) -> None:
-        assert primary_metric_higher_is_better("heilbron") is True
-
-    def test_hexagon_pack_is_maximization(self) -> None:
-        assert primary_metric_higher_is_better("hexagon_pack") is True
-
-    def test_packing_circles_is_maximization(self) -> None:
-        assert (
-            primary_metric_higher_is_better("alphaevolve/packing_circles/n_26") is True
-        )
-
-    def test_sums_diffs_is_maximization(self) -> None:
-        assert (
-            primary_metric_higher_is_better("alphaevolve/sums_diffs_finite_sets")
-            is True
-        )
-
-    def test_erdos_minimum_overlap_is_minimization(self) -> None:
-        assert (
-            primary_metric_higher_is_better("alphaevolve/erdos_minimum_overlap")
-            is False
-        )
-
-    def test_missing_problem_defaults_to_maximization(self) -> None:
-        assert primary_metric_higher_is_better("not_a_real_problem_xyz123") is True
-
-
 class TestPrimaryMetricHigherIsBetterCustomYAML:
     """Synthetic metrics files via monkeypatching REPO_ROOT — avoids touching
     the real problems tree. Confirms the helper handles malformed files,

@@ -6,13 +6,44 @@ import sys
 
 import pytest
 
+from run_gf import build_gf_overrides
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
-def _load_path_store(problem_name: str):
-    problem_dir = REPO_ROOT / "problems" / problem_name
+def _load_path_store(
+    problem_name: str,
+    *,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    assert problem_name == "vartodd_evo_gf"
+    overrides = build_gf_overrides(
+        ["matrix=16", "lb=380", "ub=420"],
+        repository_root=REPO_ROOT,
+        runtime_root=tmp_path,
+    )
+    problem_dir = Path(
+        next(
+            item.removeprefix("problem.dir=")
+            for item in overrides
+            if item.startswith("problem.dir=")
+        )
+    )
+    monkeypatch.setenv("VARTODD_VARIANT_DIR", str(problem_dir))
+    monkeypatch.setenv("VARTODD_REPOSITORY_ROOT", str(REPO_ROOT))
+
+    variant_spec = importlib.util.spec_from_file_location(
+        "variant",
+        problem_dir / "variant.py",
+    )
+    assert variant_spec is not None and variant_spec.loader is not None
+    variant = importlib.util.module_from_spec(variant_spec)
+    sys.modules["variant"] = variant
+    variant_spec.loader.exec_module(variant)
+
     module_path = problem_dir / "path_store.py"
-    module_name = f"_test_{problem_name}_path_store"
+    module_name = f"_test_{problem_name}_path_store_{tmp_path.name}"
     spec = importlib.util.spec_from_file_location(module_name, module_path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -65,12 +96,17 @@ def _selectable_text(summary: str) -> str:
     return before_evidence.split("best_nonimproved_child_paths:", 1)[0]
 
 
-@pytest.mark.parametrize("problem_name", ["vartodd_evo", "vartodd_gf32"])
-def test_low_limit_nonimproving_child_is_selectable_only_near_tail(
+@pytest.mark.parametrize("problem_name", ["vartodd_evo_gf"])
+def test_nonimproving_children_are_not_selectable(
     problem_name: str,
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
-    path_store_type = _load_path_store(problem_name)
+    path_store_type = _load_path_store(
+        problem_name,
+        monkeypatch=monkeypatch,
+        tmp_path=tmp_path,
+    )
     store = path_store_type()
     records = [
         _record(
@@ -101,25 +137,30 @@ def test_low_limit_nonimproving_child_is_selectable_only_near_tail(
     )
     selectable = _selectable_text(summary)
 
-    assert "- low_cap_nonimprover " in selectable
+    assert "low_cap_nonimprover" not in selectable
     assert "high_cap_nonimprover" not in selectable
     assert "full_nonimprover" not in selectable
-    assert "hidden(not selectable): nonimproved_child=2" in summary
+    assert "hidden(not selectable): nonimproved_child=3" in summary
 
 
-@pytest.mark.parametrize("problem_name", ["vartodd_evo", "vartodd_gf32"])
-def test_low_limit_nonimproving_child_still_retires_after_saturated_reuse(
+@pytest.mark.parametrize("problem_name", ["vartodd_evo_gf"])
+def test_improving_child_retires_after_saturated_reuse(
     problem_name: str,
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
-    path_store_type = _load_path_store(problem_name)
+    path_store_type = _load_path_store(
+        problem_name,
+        monkeypatch=monkeypatch,
+        tmp_path=tmp_path,
+    )
     store = path_store_type()
     records = [
         _record(
-            "reused_low_cap_nonimprover",
+            "reused_low_cap_child",
             rank=12,
             limit_buckets=500,
-            child_improved_loaded=False,
+            child_improved_loaded=True,
             used_count=11,
             improved_count=0,
             best_child_rank=12,
@@ -129,4 +170,4 @@ def test_low_limit_nonimproving_child_still_retires_after_saturated_reuse(
 
     summary = store.summarize(max_nonimproved_reuse=10)
 
-    assert "reused_low_cap_nonimprover" not in _selectable_text(summary)
+    assert "reused_low_cap_child" not in _selectable_text(summary)
