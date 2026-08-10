@@ -111,7 +111,7 @@ def test_build_gf_overrides_rejects_bad_launcher_arguments(tmp_path: Path) -> No
             runtime_root=tmp_path,
         )
     except ValueError as exc:
-        assert "matrix=<positive integer>" in str(exc)
+        assert "positive GF degree or exact .npy filename" in str(exc)
     else:
         raise AssertionError("invalid matrix value must be rejected")
 
@@ -159,6 +159,29 @@ def test_build_gf_overrides_rejects_unknown_initial_program_pool(
                 "ub=420",
                 "initial_programs=other",
             ],
+            repository_root=ROOT,
+            runtime_root=tmp_path,
+        )
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        "problem.name=wrong",
+        "problem.dir=/tmp/wrong",
+        "redis.prefix=wrong",
+        "initial_exec_cache_dir=/tmp/wrong-cache",
+    ],
+)
+def test_build_gf_overrides_rejects_launcher_owned_overrides(
+    override: str,
+    tmp_path: Path,
+) -> None:
+    launcher = _load_launcher()
+
+    with pytest.raises(ValueError, match="managed by the GF launcher"):
+        launcher.build_gf_overrides(
+            ["matrix=16", "lb=380", "ub=420", override],
             repository_root=ROOT,
             runtime_root=tmp_path,
         )
@@ -236,5 +259,5 @@ def test_redis_storage_uses_configured_prefix() -> None:
 def test_usage_documents_initial_program_selection() -> None:
     usage = _load_launcher()._usage()
 
-    assert "[initial_programs=default|best]" in usage
+    assert "[initial_programs=default|best|expensive]" in usage
     assert "initial_programs=best" in usage

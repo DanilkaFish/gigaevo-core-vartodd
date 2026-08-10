@@ -107,7 +107,11 @@ def _split_launcher_args(
             if key in values:
                 raise ValueError(f"{key} was specified more than once")
             values[key] = value
-        elif key not in _RESERVED_OVERRIDES:
+        elif separator and key in _RESERVED_OVERRIDES:
+            raise ValueError(
+                f"{key} is managed by the GF launcher and cannot be overridden"
+            )
+        else:
             forwarded.append(arg)
 
     missing = [key for key in ("matrix", "lb", "ub") if key not in values]
@@ -148,6 +152,20 @@ def _split_launcher_args(
         initial_programs,
         forwarded,
     )
+
+
+def require_experiment(forwarded: list[str], required: str) -> list[str]:
+    """Inject the required experiment or reject a conflicting selection."""
+    experiment_overrides = [
+        arg for arg in forwarded if arg.partition("=")[0] == "experiment"
+    ]
+    if not experiment_overrides:
+        return [f"experiment={required}", *forwarded]
+    if len(experiment_overrides) > 1:
+        raise ValueError("experiment was specified more than once")
+    if experiment_overrides[0] != f"experiment={required}":
+        raise ValueError(f"experiment must be {required}")
+    return forwarded
 
 
 def _write_metrics(

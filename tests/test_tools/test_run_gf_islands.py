@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+import pytest
 import yaml
 
 
@@ -48,6 +49,7 @@ def test_launcher_creates_isolated_overlay_store_and_redis_prefix(
     metrics = yaml.safe_load((overlay / "metrics.yaml").read_text())
     assert overlay.name == "vartodd_evo_gf_islands16"
     assert overlay.is_relative_to(tmp_path / "islands_overlays")
+    assert _value(overrides, "experiment") == "vartodd_evo_gf_islands_steady"
     assert _value(overrides, "problem.name") == "vartodd_evo_gf_islands16"
     assert _value(overrides, "redis.prefix") == "vartodd_evo_gf_islands16"
     assert _value(overrides, "initial_exec_cache_dir").endswith(
@@ -68,10 +70,47 @@ def test_launcher_creates_isolated_overlay_store_and_redis_prefix(
     assert (ROOT / "data_gf_islands16" / "path_backups").is_dir()
 
 
+def test_launcher_defaults_to_islands_experiment(tmp_path: Path) -> None:
+    launcher = _load_launcher()
+
+    overrides = launcher.build_gf_islands_overrides(
+        ["matrix=16", "lb=380", "ub=421"],
+        repository_root=ROOT,
+        runtime_root=tmp_path,
+    )
+
+    assert _value(overrides, "experiment") == "vartodd_evo_gf_islands_steady"
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        "experiment=vartodd_evo_tohpe_updated_steady",
+        "problem.name=wrong",
+        "problem.dir=/tmp/wrong",
+        "redis.prefix=wrong",
+        "initial_exec_cache_dir=/tmp/wrong-cache",
+    ],
+)
+def test_launcher_rejects_conflicting_managed_overrides(
+    override: str,
+    tmp_path: Path,
+) -> None:
+    launcher = _load_launcher()
+
+    with pytest.raises(ValueError):
+        launcher.build_gf_islands_overrides(
+            ["matrix=16", "lb=380", "ub=421", override],
+            repository_root=ROOT,
+            runtime_root=tmp_path,
+        )
+
+
 def test_island_launcher_help_documents_fresh_and_resume_runs() -> None:
     usage = _load_launcher()._usage()
 
-    assert "experiment=vartodd_evo_gf_islands_steady" in usage
+    assert "Defaults to experiment=vartodd_evo_gf_islands_steady" in usage
     assert "fresh Redis" in usage
+    assert "runner_config.prefetch_factor=1" in usage
     assert "redis.resume=true" in usage
     assert "same three-island topology" in usage

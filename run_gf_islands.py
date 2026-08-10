@@ -20,6 +20,7 @@ from run_gf import (
     _write_matrix_manifest,
     _write_metrics,
     build_gf_environment,
+    require_experiment,
 )
 
 LEGACY_SOURCE_ASSETS = (
@@ -36,6 +37,7 @@ ISLAND_SOURCE_ASSETS = (
     "task_description.txt",
     "prompts",
 )
+ISLANDS_EXPERIMENT = "vartodd_evo_gf_islands_steady"
 
 
 def _link_island_overlay_assets(
@@ -72,6 +74,7 @@ def build_gf_islands_overrides(
         initial_programs,
         forwarded,
     ) = _split_launcher_args(argv)
+    forwarded = require_experiment(forwarded, ISLANDS_EXPERIMENT)
     repository_root = repository_root.resolve()
     legacy_source = repository_root / "problems" / "vartodd_evo_gf"
     island_source = repository_root / "problems" / "vartodd_evo_gf_islands"
@@ -151,15 +154,15 @@ def _usage() -> str:
         "[soft_timeout_grace=<seconds>] "
         "[initial_programs=default|best|expensive] "
         "[ordinary run.py Hydra overrides...]\n\n"
+        "Defaults to experiment=vartodd_evo_gf_islands_steady.\n\n"
         "Start with a fresh Redis namespace:\n"
         "  python run_gf_islands.py "
-        "experiment=vartodd_evo_gf_islands_steady matrix=16 lb=380 ub=421 "
-        "cache=false max_concurrent_dags=12 max_in_flight=12 "
+        "matrix=16 lb=380 ub=421 cache=false "
+        "max_concurrent_dags=6 max_in_flight=6 "
         "runner_config.prefetch_factor=1\n\n"
         "Resume the same three-island topology and Redis namespace:\n"
         "  python run_gf_islands.py "
-        "experiment=vartodd_evo_gf_islands_steady matrix=16 lb=380 ub=421 "
-        "cache=false redis.resume=true\n"
+        "matrix=16 lb=380 ub=421 cache=false redis.resume=true\n"
     )
 
 
