@@ -136,6 +136,7 @@ def _worker_run_one_from_template(
         with_report=True,
         with_timing=True,
         seed=seed,
+        stop_requested=_soft_deadline_reached,
     )
     return seed, node, counters, discovered_at
 
@@ -1182,6 +1183,9 @@ class BaseEvaluator:
                         self.todd,
                     )
                 )
+                if _soft_deadline_reached():
+                    timed_out = True
+                    break
         else:
             executor_kind = EXECUTOR_KIND.strip().lower()
             if executor_kind in {"process", "processes", "proc"}:

@@ -4,9 +4,12 @@ from dataclasses import dataclass
 import importlib.util
 from pathlib import Path
 import sys
+import time
 from types import SimpleNamespace
 
 import pytest
+
+from run_gf import build_gf_overrides
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -101,3 +104,106 @@ def test_todd_without_stop_callback_keeps_existing_depth_behavior(
     assert best.state.rows == 7
     assert isinstance(counters, tuple)
     assert len(counters) == 2
+
+
+def _load_helper_module(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    overrides = build_gf_overrides(
+        ["matrix=16", "lb=380", "ub=420"],
+        repository_root=REPO_ROOT,
+        runtime_root=tmp_path,
+    )
+    overlay = Path(
+        next(
+            item.removeprefix("problem.dir=")
+            for item in overrides
+            if item.startswith("problem.dir=")
+        )
+    )
+    monkeypatch.setenv("VARTODD_VARIANT_DIR", str(overlay))
+    monkeypatch.setenv("VARTODD_REPOSITORY_ROOT", str(REPO_ROOT))
+    return _load_problem_module(
+        overlay / "helper.py",
+        f"_test_soft_timeout_helper_{tmp_path.name}",
+    )
+
+
+def test_worker_injects_soft_deadline_callback(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    helper = _load_helper_module(monkeypatch, tmp_path)
+    captured = {}
+    node = SimpleNamespace(state=SimpleNamespace(rows=9))
+
+    class FakeTodd:
+        def run(self, path, **kwargs):
+            captured.update(kwargs)
+            assert kwargs["stop_requested"]()
+            return node, (4, 1), 12.5
+
+    monkeypatch.setattr(helper, "_soft_deadline_reached", lambda: True)
+
+    result = helper._worker_run_one_from_template(7, object(), FakeTodd())
+
+    assert result == (7, node, (4, 1), 12.5)
+    assert captured["stop_requested"] is helper._soft_deadline_reached
+
+
+def _minimal_evaluator(helper, *, final_rank: int):
+    improved_node = SimpleNamespace(state=SimpleNamespace(rows=final_rank))
+
+    class FakePath:
+        final_node = SimpleNamespace(state=SimpleNamespace(rows=10))
+
+        def branch_path(self, node, dao, x0):
+            return SimpleNamespace(final_node=node)
+
+    class FakeTodd:
+        def run(self, path, **kwargs):
+            assert kwargs["stop_requested"]()
+            return improved_node, (4, 1), time.perf_counter()
+
+    evaluator = object.__new__(helper.BaseEvaluator)
+    evaluator.active_params = []
+    evaluator.insert = lambda params: None
+    evaluator.reinit = lambda: None
+    evaluator.current_path = FakePath()
+    evaluator.todd = FakeTodd()
+    evaluator.dao = SimpleNamespace()
+    evaluator.x0 = []
+    evaluator.total_eval = 0
+    evaluator.tcount = []
+    evaluator._best_rank = 10_000
+    evaluator.best_paths = []
+    evaluator.best_ranks = []
+    evaluator.best_evals = []
+    evaluator.best_eval = 0
+    evaluator.best_seen = 0
+    evaluator.best_seed = None
+    evaluator._search_started_at = time.perf_counter()
+    evaluator.time_to_final_rank_seconds = None
+    evaluator._executor = None
+    evaluator._executor_key = None
+    return evaluator, improved_node
+
+
+def test_single_worker_records_completed_level_before_graceful_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    helper = _load_helper_module(monkeypatch, tmp_path)
+    deadline_values = iter([False, False, True, True])
+    monkeypatch.setattr(
+        helper,
+        "_soft_deadline_reached",
+        lambda: next(deadline_values),
+    )
+    evaluator, improved_node = _minimal_evaluator(helper, final_rank=9)
+
+    with pytest.raises(helper.GracefulEvaluationTimeout):
+        evaluator.run([], seeds=[7], max_workers=1)
+
+    assert evaluator.best_rank == 9
+    assert evaluator.best_seed == 7
+    assert evaluator.best_paths[0].final_node is improved_node
+    assert evaluator.total_eval == 4
