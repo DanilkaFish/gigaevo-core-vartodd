@@ -1,6 +1,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import heapq
 import time
 from typing import Any
@@ -28,6 +29,7 @@ class Todd:
         with_report: bool = False,
         with_timing: bool = False,
         seed: int = 1,
+        stop_requested: Callable[[], bool] | None = None,
         **kwargs: Any,
     ):
         if "with_report" in kwargs:
@@ -132,6 +134,8 @@ class Todd:
                 if child.state.rows == best_node.state.rows:
                     best_counter += 1
             nodes = heapq.nlargest(next_width, new_nodes, self._beam_key)
+            if stop_requested is not None and stop_requested():
+                break
 
         if with_report:
             best_counter = min(counter, best_counter)
