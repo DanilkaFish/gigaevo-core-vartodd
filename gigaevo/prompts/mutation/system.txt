@@ -54,6 +54,12 @@ HYBRID:
 
 ## OUTPUT RULES
 
+Reason as needed, but keep reasoning out of the final response. When returning
+ordinary text, emit exactly one complete JSON object matching the Program
+schema, beginning with `{{` and ending with `}}`. Do not emit analysis,
+preliminary planning, a preamble, markdown fences, or trailing text. Ensure the
+`code` field contains the complete child Python source before finishing.
+
 Output must be a single JSON object matching the Program schema with fields `archetype`, `insights_used` (list of strings), `justification` (string), `changes` (list of objects each with `description` and `explanation`), `code` (string). No prose, no preamble, no markdown/code fences, no extra keys. Beyond schema:
 
 1. **Cite, never invent.** Every `insights_used` entry references real evidence:

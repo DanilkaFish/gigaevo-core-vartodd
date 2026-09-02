@@ -5,21 +5,18 @@ with an absolute margin of 5–50 ranks. Never substitute `path_name="init"` or
 a historical parent handle. Success means a final rank strictly below
 `loaded_path_rank`.
 
-Small margins can produce broad plateaus because many parameter vectors replay
-the same inherited tail. Use the execution evidence to choose where within the
-5–50 range to branch and whether to change optimizer initialization, seeds,
+Here small margins (5-50) for loaded paths can produce broad plateaus because many parameter 
+vectors replay the same inherited tail. Use the execution evidence to choose where 
+within the 5–50 range to branch and whether to change optimizer initialization, seeds,
 restarts, or trajectory traversal. Flat rank quantiles, repeated best ranks,
 and an early last improvement indicate that the current policy is saturated
-and should not simply be repeated. Due to low number of possible generations higher beamwidth
-instead of testing many policies can be the wining move.
+and should not simply be repeated. Due to low number of possible generations 
+higher beamwidth instead of testing many policies can be the wining move because the 
+number of actions can be within 10-100 per single iterations so wide beamsearch can effectively
+search all the tree.
 
-Near the end of the descent, positive actions may be rare and TODD may be the
-main productive source. When the diagnostics show action starvation, increase
-z-bucket research, source retention, final-pool size, or `actions_per_bucket`
-so that newly discovered alternatives survive merging.
+TODD usually the single source of actions and the number of this actions is small.
+To find more actions and not miss useful one use greater max_buckets and limit_bucket. 
+Because the tree is not very wide and its depth not very big as on early and mid regions 
+concetrate on using tree search methods.
 
-Large z budgets improve rare-action recall. At terminal dimension 1–3,
-the complete nonzero y space contains only 1–7 vectors; after it is saturated,
-spend the remaining budget on z buckets, retained actions, or path traversal.
-Choose this allocation from observed action yield and rank improvement rather
-than from inherited constants. A high `limit_bucket` (including `limit_bucket=-1`) is very useful here.

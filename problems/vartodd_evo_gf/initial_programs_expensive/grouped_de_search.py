@@ -8,14 +8,13 @@ from helper import (
     ActionPool,
     ActionSelection,
     BaseEvaluator,
-    ExplorationScore,
-    FinalizationScore,
     PolicyScores,
     SamplingBudget,
     SourcePool,
     ToddSearch,
     TohpeSearch,
     ZBucketSearch,
+    policy,
 )
 import numpy as np
 from pymoo.algorithms.soo.nonconvex.de import DE
@@ -32,6 +31,17 @@ RANK_SPAN = max(1, INITIAL_RANK - TARGET_FINAL_RANK)
 MARGIN = max(1, round(0.40 * RANK_SPAN))
 REOPEN_MARGIN = max(8, round(0.12 * RANK_SPAN))
 MAX_DEPTH = max(500, RANK_SPAN + 64)
+TOHPE_FILTERS = ((1, 10), (4, 6), (3, 4))
+
+
+@policy.exploration
+def explore_score(k, p, fn):
+    return k.nred * p.w(0) + k.ndim * p.w(1) + k.nbucket * p.w(2) + k.nyw * p.w(3) + k.nzw * p.w(4)
+
+
+@policy.final
+def final_score(k, p, fn):
+    return k.nred * p.w(0) + k.ndim * p.w(1) + k.nbucket * p.w(2) + k.nyw * p.w(3) + k.nzw * p.w(4) + k.ntohpe * p.w(5)
 
 
 def rank_from_target(fraction: float) -> int:
@@ -58,19 +68,15 @@ class Evaluator(BaseEvaluator):
             group=group,
         )
 
+    def tohpe_filter(self) -> tuple[int, int]:
+        return TOHPE_FILTERS[self.int_range(0, len(TOHPE_FILTERS) - 1, group="tohpe_filter")]
+
     def policy_mapping(self):
+        target_min_red, target_max_red = self.tohpe_filter()
         self.set_scores(
             PolicyScores(
-                ExplorationScore(
-                    [self.float_range(-4.0, 4.0, group="scores") for _ in range(5)],
-                    centers=[0.0] * 5,
-                    pow=1,
-                ),
-                FinalizationScore(
-                    [self.float_range(-4.0, 4.0, group="scores") for _ in range(6)],
-                    centers=[0.0] * 6,
-                    pow=1,
-                ),
+                exploration=explore_score.bind([self.float_range(-4.0, 4.0, group="scores") for _ in range(explore_score.n_params)]),
+                final=final_score.bind([self.float_range(-4.0, 4.0, group="scores") for _ in range(final_score.n_params)]),
             )
         )
         scout_tohpe = TohpeSearch(
@@ -79,7 +85,9 @@ class Evaluator(BaseEvaluator):
                 keep=self.int_range(10, 28, group="scout"),
                 reserve=self.int_range(1, 6, group="scout"),
             ),
-            z_choices=self.int_range(4, 16, group="scout"),
+                z_choices=self.int_range(4, 16, group="scout"),
+                target_min_red=target_min_red,
+                target_max_red=target_max_red,
         )
         tail_cap = max(128, round(self.buckets_space * 0.03))
         tail_todd = ToddSearch(
@@ -107,6 +115,8 @@ class Evaluator(BaseEvaluator):
                     SamplingBudget(one_hot="all", sparse=4, dense=8, sparse_max_weight=2),
                     SourcePool(keep=10, reserve=2),
                     z_choices=6,
+                    target_min_red=target_min_red,
+                    target_max_red=target_max_red,
                 )
             )
             self.set_todd_search(tail_todd)

@@ -1,5 +1,5 @@
-Mutate a Python tuner for VarTODD/FastTODD on the GF matrix selected by
-`run_gf.py`. Goal: minimize T-count rank. Lower is better. The active
+Mutate a Python tuner for VarTODD/FastTODD policy search on given matrix. 
+Goal: minimize T-count rank. Lower is better. The active
 instance exposes its matrix-derived `INITIAL_RANK` and run-configured
 `TARGET_FINAL_RANK` through `helper.py`.
 
@@ -34,7 +34,8 @@ use both modes.
 ## 2. Search Mechanics and Policy Knobs
 
 One policy step of FastTODD: the two sources (TOHPE, TODD) generate candidate
-actions; the exploration score ranks candidates as each source pool is filled
+actions which reduce the number of matrix column (rank) and do not change equivalence rules; 
+the exploration score ranks candidates as each source pool is filled
 and merged into one action pool; the finalization score ranks the merged pool; and
 `ActionSelection` expands the chosen action(s). A seed run repeats this step,
 descending in rank, until no positive action remains.
@@ -54,12 +55,12 @@ SamplingBudget(
     sparse_max_weight=SPARSE_MAX_WEIGHT,
 )
 ```
-- `one_hot="all"` tries every weight-1 basis vector; an integer caps them.
+- `one_hot="all"/int_number` tries every weight-1 basis vector/an integer caps sampling.
 - `sparse` samples random vectors up to `sparse_max_weight`; `dense` samples
   dense random vectors.
 - A binary null space of dimension `dim` contains only `2**dim - 1` distinct nonzero
   y vectors, so the band's `dim` bounds what y sampling can recall. In
-  low-dim bands the budgets saturate quickly; raising them past that bound
+  low-dim bands the budgets saturate quickly; raising them past that bound is safe but
   adds nothing.
 
 The two sources — `TohpeSearch` and `ToddSearch`:
@@ -68,6 +69,8 @@ TohpeSearch(
     SamplingBudget(...),
     SourcePool(...),
     z_choices=TOHPE_Z_CHOICES,
+    target_min_red=TARGET_MIN_RED,
+    target_max_red=TARGET_MAX_RED,
 )
 
 ToddSearch(
@@ -81,6 +84,13 @@ ToddSearch(
     ),
 )
 ```
+- `target_min_red` / `target_max_red` aim the TOHPE z search at a *size* of
+  reduction instead of always the largest. For each sampled y its z candidates
+  are ranked by
+  `max(target_min_red - red, red - target_max_red, 0)`,
+  so those landing inside `[target_min_red, target_max_red]` come first and,
+  outside it, the nearest to the band follow. This is just filter before explorations scoring 
+  to effectively choose intermediate z_choices actions.
 - TOHPE is the cheap source: a limited TOHPE-specific z/y search with
   `z_choices` as its z budget. It researches a common part of binary null space, which is the intersection of the null spaces for all z.
   It first samples y, then searches for `z_choices` z with the largest reduction.
@@ -94,10 +104,10 @@ ToddSearch(
 - `ZBucketSearch`: `min_buckets` is guaranteed z research; `max_buckets` is a
   reserve-target soft cap (`0` = no soft cap); `limit_bucket` is a hard
   z-candidate cap (`-1` = search the full bucket space, whose size is the
-  evaluator's `buckets_space=rank**2 + rank`).
+  evaluator's `buckets_space=rank**2/2 + rank`).
   At a state with `current_rows=R`, every finite bucket control may use any
-  integer in `0..R**2`; for example, rank 395 permits `0..156025`. The special
-  values above remain available outside that finite range convention.
+  integer in `0..R**2/2`; for example, rank 395 permits `0..78012`. The special
+  values above remain available outside that finite range convention. Be 
 
 Finite z coverage is a quality-throughput tradeoff, not a monotonic runtime
 rule. Smaller limits make one policy evaluation cheaper and can buy more
@@ -112,7 +122,7 @@ Per-source retention — `SourcePool`:
 SourcePool(keep=SOURCE_KEEP, reserve=SOURCE_RESERVE)
 ```
 - `keep` is the max actions retained per source; `keep=0` disables the source.
-- `reserve <= keep` is the minimum carried into the final merge.
+- `reserve <= keep` is the minimum carried into the final merge (meaninfgul for TODD).
 - Low `reserve` also lets TODD stop researching z near `min_buckets`, so
   `max_buckets` may never be reached, but low `reserve` leads to search saturation for lack of choice.
 
@@ -210,7 +220,6 @@ calls to anything but `fn.*` are rejected at import.
 - The exploration score ranks generated candidates during source pooling and
   merge: it decides which candidates survive into the intermediate and final
   action pool, so if pools are not filled this score effectively does nothing.
-  It also ranks the inner z choices for a fixed y.
 - The finalization score ranks the merged pool and beam choices: it decides
   which action is actually taken.
 - Both scores rank already generated candidates and do not say whether future
@@ -228,9 +237,7 @@ Available in **both** exploration and finalization expressions:
 | `bucket` | `nbucket` | z-bucket reduction potential |
 | `yw` / `zw` | `nyw` / `nzw` | y / z Hamming weight; `nzw` is z density |
 | `zsize` | — | length of the z vector |
-| `max_red` | `nmax_red` | bucket's reduction ceiling; `nmax_red` is identical to `nbucket`, prefer `nbucket` |
 | `source` | — | provenance: `1` TOHPE, `2` TOHPE-prefix, `3` TODD |
-| `bucket_id` | — | identifier of the originating bucket |
 | `bn`, `dn`, `wvwn` | — | the normalizers: largest bucket this iteration, TOHPE dimension plus five, parity matrix rows |
 
 Available in **finalization only**, unavailable while source pools are still
@@ -241,10 +248,9 @@ filling:
 | `tohpe` | `ntohpe` | TOHPE lookahead dimension of the resulting state |
 | `rank_red` | `nrank_red` | how many candidates beat this one on reduction; normalized is a fraction of the pool |
 | `rank_dim` | `nrank_dim` | how many candidates beat this basis dimension |
-| `rank_score` | `nrank_score` | how many candidates beat this pool score |
+| `rank_score` | `nrank_score` | how many candidates beat this pool exploration score |
 | `pool_size` | — | number of candidates in the finalized pool |
 | `pool_tohpe`, `pool_prefix`, `pool_todd` | `f_tohpe`, `f_prefix`, `f_todd` | the merged pool's source mix, as counts and as fractions |
-| `k_idx`, `l_idx` | — | the two indices of the action pair |
 
 The `rank_*` normalized forms are fractions of the pool, so they stay meaningful
 after the raw reduction scale collapses in the terminal band.
@@ -261,9 +267,9 @@ ActionSelection(beamwidth=BEAMWIDTH, mode=SELECTION_MODE, temperature=TEMPERATUR
 
 Cost model. Approximate stage runtime:
 ```text
-stage_time ~= E * ceil(S / W) * D * B * C_policy
+stage_time ~= E * S * D * B * C_policy
 ```
-- `E`: optimizer evaluations; `S`: seeds; `W`: seed workers (default 1);
+- `E`: number of evaluations; `S`: seeds;
 - `D`: reached path depth; `B`: effective beamwidth;
 - `C_policy`: cost of action generation, scoring, pooling, and selection.
 
@@ -325,11 +331,8 @@ from helper import (
     policy,
 )
 ```
-`describe_knobs()` from `helper` prints the knob list and available math at
-runtime, generated from the implementation.
 The available optimizer library is `pymoo`; standard numeric support such as
-`numpy` may be imported as usual. Evolved programs must not install packages
-at runtime or depend on network access.
+`numpy` may be imported as usual.
 
 Constructor and start modes (mutation-facing arguments):
 ```python
@@ -341,18 +344,13 @@ Evaluator(
 )
 ```
 
-`path_name="init"` loads the selected GF matrix from the variant-specific data
-environment and starts a fresh path at `INITIAL_RANK`. Do not hard-code a
-matrix path or a matrix-specific initial rank.
+`path_name="init"` loads the researched GF matrix and starts a fresh path at `INITIAL_RANK`. 
 
 `path_name=<live_path_name>` loads a selectable path from the current Live
-Path Store (§5) and branches it into a new init. The run then reports:
+Path Store (§5) and branches replacing the standard init matrix. The run then reports:
 - `loaded_path_rank`: final rank of the loaded path — the rank a saved-path
   refiner must beat;
-- `loaded_rank`: rank where the child actually starts after branching. This is
-  not the parent final rank;
-- `loaded_path_name`: which path was loaded; its observed aggregate z research and
-  active TODD cap are encoded in the current path name (§5);
+- `loaded_rank`: rank if the replaced init matrix
 - `init_rank_thr`: branch threshold used for the new init.
 
 If `init_rank_thr` is omitted, the helper uses `loaded_path_rank + margin`,
@@ -684,8 +682,4 @@ Guardrails for vetting Program Insights and mutation context:
   `pool:<total>`.
 - Runtime claims should name the multiplier changed and distinguish ab initio search
   from near-final saved-path tails.
-- Score-center claims should treat `C_RED` as an exact, unnormalized
-  rank-reduction count, while all other centers remain normalized to `[0, 1]`.
-  Score weights retain the same scale; also respect the rendered
-  `w[...]`/`c[...]` split.
-- Cheap runtime is strong harmful evidence. The runtime should be above 2000s
+- Cheap runtime is strong harmful evidence. The runtime should be above at least 40% of sentinel.
