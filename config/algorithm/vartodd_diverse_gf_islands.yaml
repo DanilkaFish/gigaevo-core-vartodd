@@ -5,6 +5,17 @@ defaults:
   - vartodd_diverse_gf16
   - _self_
 
+mid_root_reuse_limit: 6
+mid_family_reuse_limit: 8
+near_family_reuse_limit: 7
+near_path_reuse_limit: 3
+mid_no_improvement_penalty: 12.0
+near_no_improvement_penalty: 8.0
+rank_sampling_temperature: 8.0
+rank_sampling_child_penalty: 0.15
+near_rank_sampling_temperature: 4.0
+near_rank_sampling_child_penalty: 0.1
+
 vartodd_islands_route_context:
   _target_: custom.vartodd_islands_context.VartoddIslandsRouteContextProvider
   problem_dir: ${problem.dir}
@@ -13,6 +24,10 @@ vartodd_islands_route_context:
   selectable_paths_per_rank: 2
   path_cards_max_chars: 24000
   parent_aux_max_chars: 12000
+  mid_root_reuse_limit: ${mid_root_reuse_limit}
+  mid_family_reuse_limit: ${mid_family_reuse_limit}
+  near_family_reuse_limit: ${near_family_reuse_limit}
+  near_path_reuse_limit: ${near_path_reuse_limit}
 
 mutation_operator:
   # The strategy selects one required regime before selecting its parents.
@@ -87,7 +102,7 @@ near_end_behavior_space:
 islands:
   - _target_: gigaevo.evolution.strategies.map_elites.IslandConfig
     island_id: ab_initio
-    max_size: 20
+    max_size: 35
     behavior_space: ${ab_initio_behavior_space}
     archive_selector:
       _target_: custom.archive_selectors.RankAwareRetentionSelector
@@ -96,13 +111,12 @@ islands:
       fitness_key_higher_is_better:
         - ${higher_is_better}
     elite_selector:
-      _target_: gigaevo.evolution.strategies.map_elites.WeightedEliteSelector
+      _target_: custom.archive_selectors.RankWeightedEliteSelector
       fitness_key: ${primary_key}
       fitness_key_higher_is_better: ${higher_is_better}
-      lambda_: 4.0
-      child_penalty: 0.10
+      rank_temperature: ${rank_sampling_temperature}
+      child_penalty: ${rank_sampling_child_penalty}
       epsilon: 1e-8
-      normalize_fitness: true
     archive_remover:
       _target_: gigaevo.evolution.strategies.map_elites.FitnessArchiveRemover
       fitness_key: ${primary_key}
@@ -114,7 +128,7 @@ islands:
 
   - _target_: gigaevo.evolution.strategies.map_elites.IslandConfig
     island_id: mid_margin
-    max_size: 20
+    max_size: 35
     behavior_space: ${mid_margin_behavior_space}
     archive_selector:
       _target_: custom.archive_selectors.RankAwareRetentionSelector
@@ -123,13 +137,13 @@ islands:
       fitness_key_higher_is_better:
         - ${higher_is_better}
     elite_selector:
-      _target_: gigaevo.evolution.strategies.map_elites.WeightedEliteSelector
+      _target_: custom.archive_selectors.RankImprovementRankWeightedEliteSelector
       fitness_key: ${primary_key}
       fitness_key_higher_is_better: ${higher_is_better}
-      lambda_: 4.0
-      child_penalty: 0.10
+      rank_temperature: ${rank_sampling_temperature}
+      child_penalty: ${rank_sampling_child_penalty}
       epsilon: 1e-8
-      normalize_fitness: true
+      no_improvement_penalty: ${mid_no_improvement_penalty}
     archive_remover:
       _target_: gigaevo.evolution.strategies.map_elites.FitnessArchiveRemover
       fitness_key: ${primary_key}
@@ -150,13 +164,13 @@ islands:
       fitness_key_higher_is_better:
         - ${higher_is_better}
     elite_selector:
-      _target_: gigaevo.evolution.strategies.map_elites.WeightedEliteSelector
+      _target_: custom.archive_selectors.RankImprovementRankWeightedEliteSelector
       fitness_key: ${primary_key}
       fitness_key_higher_is_better: ${higher_is_better}
-      lambda_: 4.0
-      child_penalty: 0.10
+      rank_temperature: ${near_rank_sampling_temperature}
+      child_penalty: ${near_rank_sampling_child_penalty}
       epsilon: 1e-8
-      normalize_fitness: true
+      no_improvement_penalty: ${near_no_improvement_penalty}
     archive_remover:
       _target_: gigaevo.evolution.strategies.map_elites.FitnessArchiveRemover
       fitness_key: ${primary_key}
@@ -177,7 +191,7 @@ evolution_strategy:
   bootstrap_source_island: ab_initio
   bootstrap_until_size: 8
   bootstrap_mix_probability: 0.70
-  steady_mix_probability: 0.35
+  steady_mix_probability: 0.15
   route_context_provider: ${ref:vartodd_islands_route_context}
   mutation_routes:
     - regime_id: ab_initio

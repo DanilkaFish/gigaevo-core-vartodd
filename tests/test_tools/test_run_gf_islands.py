@@ -82,6 +82,123 @@ def test_launcher_defaults_to_islands_experiment(tmp_path: Path) -> None:
     assert _value(overrides, "experiment") == "vartodd_evo_gf_islands_steady"
 
 
+def test_launcher_emits_default_path_policy_controls(tmp_path: Path) -> None:
+    launcher = _load_launcher()
+
+    overrides = launcher.build_gf_islands_overrides(
+        ["matrix=16", "lb=380", "ub=421"],
+        repository_root=ROOT,
+        runtime_root=tmp_path,
+    )
+
+    assert _value(overrides, "mid_root_reuse_limit") == "6"
+    assert _value(overrides, "mid_family_reuse_limit") == "8"
+    assert _value(overrides, "near_family_reuse_limit") == "7"
+    assert _value(overrides, "near_path_reuse_limit") == "2"
+    assert _value(overrides, "mid_no_improvement_penalty") == "12.0"
+    assert _value(overrides, "near_no_improvement_penalty") == "16.0"
+
+
+def test_launcher_accepts_explicit_path_policy_controls(tmp_path: Path) -> None:
+    launcher = _load_launcher()
+
+    overrides = launcher.build_gf_islands_overrides(
+        [
+            "matrix=16",
+            "lb=380",
+            "ub=421",
+            "mid_root_reuse_limit=5",
+            "mid_family_reuse_limit=9",
+            "near_family_reuse_limit=11",
+            "near_path_reuse_limit=3",
+            "mid_no_improvement_penalty=14.5",
+            "near_no_improvement_penalty=19",
+        ],
+        repository_root=ROOT,
+        runtime_root=tmp_path,
+    )
+
+    assert _value(overrides, "mid_root_reuse_limit") == "5"
+    assert _value(overrides, "mid_family_reuse_limit") == "9"
+    assert _value(overrides, "near_family_reuse_limit") == "11"
+    assert _value(overrides, "near_path_reuse_limit") == "3"
+    assert _value(overrides, "mid_no_improvement_penalty") == "14.5"
+    assert _value(overrides, "near_no_improvement_penalty") == "19.0"
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        "mid_root_reuse_limit=0",
+        "mid_family_reuse_limit=-1",
+        "near_family_reuse_limit=0",
+        "near_path_reuse_limit=1.5",
+        "mid_no_improvement_penalty=-1",
+        "near_no_improvement_penalty=nan",
+        "near_no_improvement_penalty=inf",
+    ],
+)
+def test_launcher_rejects_invalid_path_policy_controls(
+    override: str,
+    tmp_path: Path,
+) -> None:
+    launcher = _load_launcher()
+
+    with pytest.raises(ValueError):
+        launcher.build_gf_islands_overrides(
+            ["matrix=16", "lb=380", "ub=421", override],
+            repository_root=ROOT,
+            runtime_root=tmp_path,
+        )
+
+
+def test_launcher_rejects_duplicate_path_policy_control(tmp_path: Path) -> None:
+    launcher = _load_launcher()
+
+    with pytest.raises(ValueError, match="mid_root_reuse_limit"):
+        launcher.build_gf_islands_overrides(
+            [
+                "matrix=16",
+                "lb=380",
+                "ub=421",
+                "mid_root_reuse_limit=6",
+                "mid_root_reuse_limit=7",
+            ],
+            repository_root=ROOT,
+            runtime_root=tmp_path,
+        )
+
+
+def test_island_launcher_selects_ultra_expensive_pool_and_timeout(
+    tmp_path: Path,
+) -> None:
+    launcher = _load_launcher()
+
+    overrides = launcher.build_gf_islands_overrides(
+        [
+            "matrix=16",
+            "lb=380",
+            "ub=421",
+            "initial_programs=ultra_expensive",
+        ],
+        repository_root=ROOT,
+        runtime_root=tmp_path,
+    )
+
+    overlay = Path(_value(overrides, "problem.dir"))
+    metrics = yaml.safe_load((overlay / "metrics.yaml").read_text())
+    assert overlay.parent.name == "gf16_lb380_ub421_seeds_ultra_expensive"
+    assert (overlay / "initial_programs").resolve() == (
+        ROOT / "problems" / "vartodd_evo_gf" / "initial_programs_ultra_expensive"
+    ).resolve()
+    assert metrics["specs"]["runtime"]["upper_bound"] == 9000
+    assert metrics["specs"]["runtime"]["sentinel_value"] == 9000
+    assert _value(overrides, "vartodd_call_timeout") == "9000"
+    assert _value(overrides, "initial_exec_cache_dir").endswith(
+        "islands_cache/gf16/ultra_expensive"
+    )
+
+
 @pytest.mark.parametrize(
     "override",
     [
@@ -113,4 +230,7 @@ def test_island_launcher_help_documents_fresh_and_resume_runs() -> None:
     assert "fresh Redis" in usage
     assert "runner_config.prefetch_factor=1" in usage
     assert "redis.resume=true" in usage
+    assert "redis.resume_incomplete=discard" in usage
     assert "same three-island topology" in usage
+    assert "[initial_programs=default|best|expensive|ultra_expensive]" in usage
+    assert "9000" in usage

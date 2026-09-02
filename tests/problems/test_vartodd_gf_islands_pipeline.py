@@ -2,7 +2,6 @@ from pathlib import Path
 
 import yaml
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PIPELINE = REPO_ROOT / "config" / "pipeline" / "vartodd_islands_pipeline.yaml"
 
@@ -19,6 +18,16 @@ def test_island_pipeline_uses_local_statistics_and_enriches_path_cards() -> None
     assert nodes["PathCardEnrichmentStage"]["_target_"] == (
         "custom.vartodd_islands_context.PathCardEnrichmentStage"
     )
+    assert nodes["CallProgramFunction"]["_target_"] == (
+        "custom.vartodd_islands_context.IslandPathAwareCallProgramFunction"
+    )
+    for key in (
+        "mid_root_reuse_limit",
+        "mid_family_reuse_limit",
+        "near_family_reuse_limit",
+        "near_path_reuse_limit",
+    ):
+        assert key not in nodes["CallProgramFunction"]
     edges = {
         (
             edge["source_stage"],

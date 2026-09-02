@@ -1,8 +1,7 @@
 ## Required Island Regime: Ab-initio search
 
 Start from `Evaluator(path_name="init")` and construct a complete reusable
-path. Use standalone TOHPE as the main early action source. Keep TODD disabled
-or light until lower-rank execution evidence supports a scheduled transition.
+path. Use standalone TOHPE as the main early action source. Keep TODD disabled.
 Do not load or infer a saved path.
 
 The main compute strategy is cheap action generation across the easy and middle
@@ -16,8 +15,9 @@ rank schedule targeting an evidenced hard lower band.
 Compare two explicit sampling hypotheses. The more-complete sampling strategy
 can make each policy evaluation less stochastic and scoring more
 representative. The lighter stochastic sampling strategy can fund more
-optimizer evaluations and independent chances to discover a good path which is can be very
-helpful especially due to generally low optimization budget and iregular function.
+optimizer evaluations and independent chances to discover a good path, which can be very
+helpful especially due to generally low optimization budget and irregular function.
+Concetrate on the scoring function choices, try different ideas and preserve what works better.
 
 Seeds for policy testing are not only for final validation. Using multiple seeds during 
 optimization can expose different stochastic action sets and trajectories and make the loss more robust, helping 
@@ -29,4 +29,4 @@ Inspect optimizer family, initialization, population and social/differential
 parameters, termination, parameter-group staging, and restart placement. Form
 one causal budget-reallocation hypothesis and keep schedules inside rank bands
 that the execution can actually reach. Choose what policy parameters to optimize,
-what to fix and what ranges use.
+what to fix, and what ranges to use.

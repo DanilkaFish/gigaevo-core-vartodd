@@ -1,27 +1,28 @@
 ## Required Island Regime: Medium-margin path refinement
 
 Load one exact `path_name` from the compact mid-margin Selectable Shared Paths
-inventory. Never substitute `path_name="init"`. Choose the branch point by its
-quantile in the loaded path's rank span from final rank to initial rank. As a
-general working region, use a margin of roughly 1/4 to 3/4 of
-`initial_rank - final_rank`. This preserves enough of the useful prefix while
-branching early enough to build a genuinely different descent instead of
-replaying the inherited tail. Treat the branch quantile as a search variable,
-not as a fixed or conveniently rounded margin inherited from prior programs.
-Success means a final rank strictly below `loaded_path_rank`; equal rank is
-failure even with a lower TODD cap or shorter runtime.
+inventory. Never substitute `path_name="init"`. Let `selected_path_rank` be the
+card's `rank`. Size the branch margin from the global search span
+`INITIAL_RANK - selected_path_rank`; a useful starting region is roughly 1/4
+to 3/4 of that span. `producer_start_rank`, the `_i...`
+component of a path name, `loaded_rank`, and a parent's local starting rank are
+diagnostic values and must not replace `INITIAL_RANK` in this calculation.
+Treat the branch location as a search choice rather than copying a convenient
+constant. Success means a final rank strictly below `loaded_path_rank`.
 
-The inventory states the current frontier once, followed by exact path name,
-final rank, and origin. All displayed paths have the same route-local failure
-allowance; frontier paths receive no permanent placement or retirement
-exception. Choose from the displayed evidence. A higher-rank path is useful
-when it supports a concrete alternative-prefix hypothesis whose target is
-below the inventory frontier. Branch before the inherited failure band, not
-inside the already-collapsed tail.
+The inventory has two independent sections. `Ab-initio roots` exposes up to
+four strong original paths. Each stays visible after descendants improve it,
+shows `uses=.../6`, and reports `best_descendant_rank` across its whole lineage.
+`Mid-margin family frontiers` exposes up to four best current descendants from
+distinct mid-margin families. `family_uses=.../8` is shared by every attempted
+child in that family; an improving descendant replaces the representative but
+does not reset the family counter. Choose the section and path that support the
+experiment you intend to run. Use `best_descendant_rank` and `child_yield=i/f`
+to distinguish paths that have produced improvements from paths that are merely
+low-ranked and unused.
 
-Reconstruct the easier prefix cheaply with TOHPE. Schedule heavier TODD only
-over reached bands where source acceptance collapses or TOHPE stops supplying
-positive actions. Allocate optimizer evaluations, seeds, and restarts from
+Concetrate on the scoring function choices, try different ideas and preserve what works better.
+Allocate optimizer evaluations, seeds, and restarts from
 observed segment yield: productive segments may be extended, while flat rank
 quantiles, repeated best ranks, and late last-improvement evidence call for a
 different restart or search allocation.

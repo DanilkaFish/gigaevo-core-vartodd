@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from gigaevo.evolution.engine.config import SteadyStateEngineConfig
 from gigaevo.evolution.engine.snapshot import (
     ENGINE_SNAPSHOT_KEY,
@@ -30,6 +32,7 @@ from gigaevo.evolution.strategies.multi_island import (
 from gigaevo.evolution.strategies.selectors import SumArchiveSelector
 from gigaevo.programs.program import Program
 from gigaevo.programs.program_state import ProgramState
+from run import _prepare_incomplete_programs_for_resume
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -135,6 +138,54 @@ class TestRecoverStrandedPrograms:
     async def test_empty_database_returns_zero(self, fakeredis_storage) -> None:
         """Empty database returns 0."""
         assert await fakeredis_storage.recover_stranded_programs() == 0
+
+
+class TestResumeIncompletePolicy:
+    async def test_retry_preserves_existing_resume_behavior(
+        self, fakeredis_storage
+    ) -> None:
+        running = _prog(ProgramState.RUNNING)
+        queued = _prog(ProgramState.QUEUED)
+        await fakeredis_storage.add(running)
+        await fakeredis_storage.add(queued)
+
+        action, count = await _prepare_incomplete_programs_for_resume(
+            fakeredis_storage, "retry"
+        )
+
+        assert (action, count) == ("recovered", 1)
+        assert await fakeredis_storage.count_by_status(ProgramState.RUNNING.value) == 0
+        assert await fakeredis_storage.count_by_status(ProgramState.QUEUED.value) == 2
+
+    async def test_discard_makes_all_incomplete_programs_terminal(
+        self, fakeredis_storage
+    ) -> None:
+        running = _prog(ProgramState.RUNNING)
+        queued = _prog(ProgramState.QUEUED)
+        done = _prog(ProgramState.DONE)
+        for program in (running, queued, done):
+            await fakeredis_storage.add(program)
+
+        action, count = await _prepare_incomplete_programs_for_resume(
+            fakeredis_storage, "discard"
+        )
+
+        assert (action, count) == ("discarded", 2)
+        assert await fakeredis_storage.count_by_status(ProgramState.RUNNING.value) == 0
+        assert await fakeredis_storage.count_by_status(ProgramState.QUEUED.value) == 0
+        assert (
+            await fakeredis_storage.count_by_status(ProgramState.DISCARDED.value) == 2
+        )
+        assert await fakeredis_storage.count_by_status(ProgramState.DONE.value) == 1
+        assert (await fakeredis_storage.get(running.id)).state == ProgramState.DISCARDED
+        assert (await fakeredis_storage.get(queued.id)).state == ProgramState.DISCARDED
+        assert (await fakeredis_storage.get(done.id)).state == ProgramState.DONE
+
+    async def test_invalid_policy_is_rejected(self, fakeredis_storage) -> None:
+        with pytest.raises(ValueError, match="redis.resume_incomplete"):
+            await _prepare_incomplete_programs_for_resume(
+                fakeredis_storage, "unsupported"
+            )
 
 
 # ---------------------------------------------------------------------------

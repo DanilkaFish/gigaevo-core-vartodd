@@ -6,6 +6,9 @@ redis:
   port: 6379
   db: 0
   resume: false
+  # retry: reevaluate interrupted programs before steady-state dispatch starts.
+  # discard: terminalize interrupted programs and dispatch new mutations immediately.
+  resume_incomplete: retry
   # Namespace for this run's Redis keys. Defaults to ${problem.name} so that
   # pipelines can write `${redis.prefix}` and get the same key-prefix used by
   # redis_storage.config.key_prefix below (I-12). Override per-run if a run

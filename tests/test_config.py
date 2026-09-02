@@ -159,14 +159,33 @@ def test_vartodd_gf_islands_steady_experiment_contract():
     ]
     spaces = [island.behavior_space for island in cfg.islands]
     assert len({id(space) for space in spaces}) == 3
-    assert all(island.max_size == 20 for island in cfg.islands)
-    assert all(island.elite_selector.lambda_ == 5.0 for island in cfg.islands)
+    assert [island.max_size for island in cfg.islands] == [35, 35, 35]
+    assert cfg.islands[0].elite_selector._target_ == (
+        "custom.archive_selectors.RankWeightedEliteSelector"
+    )
+    assert cfg.islands[1].elite_selector._target_ == (
+        "custom.archive_selectors.RankImprovementRankWeightedEliteSelector"
+    )
+    assert [
+        cfg.islands[index].elite_selector.rank_temperature for index in (0, 1)
+    ] == [8.0, 8.0]
+    assert [cfg.islands[index].elite_selector.child_penalty for index in (0, 1)] == [
+        0.10,
+        0.10,
+    ]
+    assert cfg.rank_sampling_temperature == 8.0
+    assert cfg.rank_sampling_child_penalty == 0.10
+    assert cfg.islands[2].elite_selector._target_ == (
+        "custom.archive_selectors.RankImprovementRankWeightedEliteSelector"
+    )
+    assert cfg.islands[2].elite_selector.rank_temperature == 4.0
+    assert cfg.islands[2].elite_selector.child_penalty == 0.005
     assert cfg.evolution_strategy.enable_migration is False
     assert cfg.evolution_strategy.initial_island_id == "ab_initio"
     assert cfg.evolution_strategy.bootstrap_source_island == "ab_initio"
     assert cfg.evolution_strategy.bootstrap_until_size == 8
     assert cfg.evolution_strategy.bootstrap_mix_probability == 0.70
-    assert cfg.evolution_strategy.steady_mix_probability == 0.10
+    assert cfg.evolution_strategy.steady_mix_probability == 0.15
     assert "seed_island_map" not in cfg.evolution_strategy
 
     routes = cfg.evolution_strategy.mutation_routes
@@ -179,9 +198,9 @@ def test_vartodd_gf_islands_steady_experiment_contract():
         )
         for route in routes
     ] == [
-        ("ab_initio", "ab_initio", 0.40, "ab_initio"),
+        ("ab_initio", "ab_initio", 0.35, "ab_initio"),
         ("mid_margin", "mid_margin", 0.35, "path_refinement"),
-        ("near_end", "near_end", 0.25, "path_refinement"),
+        ("near_end", "near_end", 0.30, "path_refinement"),
     ]
     assert all("guidance" not in route for route in routes)
 
@@ -192,6 +211,40 @@ def test_vartodd_gf_islands_steady_experiment_contract():
         cfg.vartodd_islands_route_context._target_
         == "custom.vartodd_islands_context.VartoddIslandsRouteContextProvider"
     )
+
+
+def test_vartodd_gf_islands_path_policy_is_wired_only_to_prompt_context():
+    cfg = _compose_with_experiment_problem(
+        "experiment=vartodd_evo_gf_islands_steady",
+        "problem.name=vartodd_evo_gf_islands16",
+        "mid_root_reuse_limit=5",
+        "mid_family_reuse_limit=9",
+        "near_family_reuse_limit=11",
+        "near_path_reuse_limit=3",
+        "mid_no_improvement_penalty=14",
+        "near_no_improvement_penalty=18",
+    )
+
+    call = cfg.dag_blueprint.nodes.CallProgramFunction
+    assert call._target_ == (
+        "custom.vartodd_islands_context.IslandPathAwareCallProgramFunction"
+    )
+    for key in (
+        "mid_root_reuse_limit",
+        "mid_family_reuse_limit",
+        "near_family_reuse_limit",
+        "near_path_reuse_limit",
+    ):
+        assert key not in call
+    context = cfg.vartodd_islands_route_context
+    assert (
+        context.mid_root_reuse_limit,
+        context.mid_family_reuse_limit,
+        context.near_family_reuse_limit,
+        context.near_path_reuse_limit,
+    ) == (5, 9, 11, 3)
+    assert cfg.islands[1].elite_selector.no_improvement_penalty == 14
+    assert cfg.islands[2].elite_selector.no_improvement_penalty == 18
 
 
 def test_legacy_vartodd_gf_experiment_remains_single_island():
@@ -362,6 +415,11 @@ def test_redis_prefix_resolves_to_problem_name():
         "redis.prefix should resolve to ${problem.name} — did you delete the "
         "`prefix:` line in config/redis/default.yaml? (regression of I-12)"
     )
+
+
+def test_resume_incomplete_defaults_to_retry():
+    cfg = _compose()
+    assert cfg.redis.resume_incomplete == "retry"
 
 
 @pytest.mark.parametrize("variant", _group_choices("pipeline"))

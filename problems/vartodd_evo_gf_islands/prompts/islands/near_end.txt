@@ -1,69 +1,25 @@
 ## Required Island Regime: Near-end refinement
 
-Load one exact current `path_name` from the detailed near-end Selectable Shared Paths
-inventory with margin 10–50. Never substitute `path_name="init"` or a historical
-parent handle. Success means a final rank strictly below `loaded_path_rank`;
-equal rank is failure even when TODD cap or runtime is lower.
+Load one exact current `path_name` from the Selectable Shared Paths inventory
+with an absolute margin of 5–50 ranks. Never substitute `path_name="init"` or
+a historical parent handle. Success means a final rank strictly below
+`loaded_path_rank`.
 
-Read the inventory before choosing the path. Its header gives
-`frontier_rank`, the best final rank in the live common store. Each card gives
-the path rank, origin, depth, kind/restart band, near-end route usage, best
-child rank, policy bands/profiles, and producer-search yield. The route counter
-`near u/i/f` means valid near-end uses, improvements, and non-improvements;
-invalid or hard-timeout executions are not included. All displayed paths have
-the same route-local failure allowance; frontier paths are not pinned or exempt
-from retirement.
+Small margins can produce broad plateaus because many parameter vectors replay
+the same inherited tail. Use the execution evidence to choose where within the
+5–50 range to branch and whether to change optimizer initialization, seeds,
+restarts, or trajectory traversal. Flat rank quantiles, repeated best ranks,
+and an early last improvement indicate that the current policy is saturated
+and should not simply be repeated. Due to low number of possible generations higher beamwidth
+instead of testing many policies can be the wining move.
 
-For example:
+Near the end of the descent, positive actions may be rare and TODD may be the
+main productive source. When the diagnostics show action starvation, increase
+z-bucket research, source retention, final-pool size, or `actions_per_bucket`
+so that newly discovered alternatives survive merging.
 
-```text
-frontier_rank=391; rank=391; near u/i/f=4/0/4; best_child_rank=391
-```
-
-This says four valid near-end attempts loaded a frontier path and none beat it.
-Use another card or materially change action generation and trajectory
-traversal; do not replay the same terminal policy. Above-frontier cards may be
-any distance above the frontier and represent alternative descents. Once one
-has reproduced the frontier in near-end, it is removed from this inventory.
-
-Small margins often produce broad plateaus because many parameter vectors map
-to the same inherited tail. The quality-first objective is to research the
-final positive actions and plausible trajectories as thoroughly as the
-deadline permits. Overcoming action-generation saturation is required to
-supply tree search with more viable actions and therefore more chances to find
-the rare trajectory that lowers rank. When terminal action starvation is
-evidenced, use heavy TODD with high or unlimited z coverage. `min_buckets`
-controls guaranteed research, `max_buckets` is the reserve-driven soft target,
-and `limit_bucket=-1` removes the hard cap. High `min_buckets` and
-`max_buckets` help generate enough actions to choose among genuine
-alternatives.
-
-Large z caps spend more work on each policy but improve rare-action recall;
-smaller caps permit more independent policies, optimizer evaluations, seeds,
-or restarts. Choose this tradeoff from comparative rank yield. Low z acceptance
-means the terminal region is hard and may require much more research; it does
-not mean TODD is waste.
-
-Set source reserve, retention, final-pool size, and `actions_per_bucket` high
-enough that discovered alternatives survive merging. Use a high beamwidth when
-broad path traversal is needed to escape the optimization plateau. Action
-generation, retention, and traversal must work together: wider tree search
-cannot help if it receives the same saturated action set, and newly generated
-actions cannot help if pools discard them or beam search never checks their
-trajectories. At terminal dimension 1–3 the complete nonzero y space has only
-1–7 vectors, so stop adding
-y samples after saturation and spend remaining budget on z buckets, retained
-actions, or path traversal. Flat rank quantiles, repeated best ranks, and a
-replayed tail are evidence to reallocate optimizer tuning toward exhaustive
-action recall and path checking. In this regime, mapped optimization can be
-worse than stochastic policy sampling combined with wide tree search.
-
-When selectable paths have the same final rank, normally 
-prefer the path with the greater init_rank. A lower-init_rank path was usually 
-produced by an earlier near-tail refinement, so its terminal suffix has already
-received concentrated search and is more likely to be saturated. A greater-init_ranpath
-reached the same final rank through a longer descent; its terminal actions may have been
-found incidentally and remain comparatively under-researched. Near-end search should
-load that longer path and investigate its tail thoroughly. Prefer the lower-init_rank 
-path only when its policy profile or route statistics provide concrete evidence 
-of an untested terminal mechanism.
+Large z budgets improve rare-action recall. At terminal dimension 1–3,
+the complete nonzero y space contains only 1–7 vectors; after it is saturated,
+spend the remaining budget on z buckets, retained actions, or path traversal.
+Choose this allocation from observed action yield and rank improvement rather
+than from inherited constants. A high `limit_bucket` (including `limit_bucket=-1`) is very useful here.

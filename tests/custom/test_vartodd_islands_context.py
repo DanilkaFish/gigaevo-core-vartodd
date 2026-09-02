@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from custom.additional_stages import CachedCallProgramFunction
 from custom.vartodd_islands_context import (
     IslandEvolutionaryStatisticsCollector,
+    IslandPathAwareCallProgramFunction,
     PathCardEnrichmentInputs,
     PathCardEnrichmentStage,
     VartoddIslandsRouteContextProvider,
+    extract_literal_evaluator_path_name,
 )
 from gigaevo.evolution.strategies.base import MutationRoute
 from gigaevo.programs.metrics.context import MetricsContext, MetricSpec
@@ -285,7 +289,8 @@ async def test_path_card_enrichment_records_exact_saved_path(
         }
     )
 
-    result = await stage.execute(_program(395.2, "near_end"))
+    program = _program(395.2, "near_end")
+    result = await stage.execute(program)
 
     assert result.output.data == "f395_i433_child_z5000of8192"
     store.update_evidence_card.assert_called_once()
@@ -297,6 +302,13 @@ async def test_path_card_enrichment_records_exact_saved_path(
     assert producer["best_seen_times"] == 63
     assert producer["last_improvement"] == "2034/395"
     assert producer["timeout_salvaged"] is False
+    assert producer["created_by_route"] == "near_end"
+    store.register_created_path.assert_called_once_with(
+        "f395_i433_child_z5000of8192",
+        route_id="near_end",
+        parent_name="f397_i463_parent_z512of1024",
+        program_id=program.id,
+    )
 
 
 def test_enrichment_input_contract_is_optional() -> None:
@@ -306,3 +318,72 @@ def test_enrichment_input_contract_is_optional() -> None:
         runtime=None,
     )
     assert params.metrics is None
+
+
+@pytest.mark.parametrize(
+    ("code", "expected"),
+    [
+        (
+            'evaluator = Evaluator(path_name="f390_i420_deadbeef_z10of20")',
+            "f390_i420_deadbeef_z10of20",
+        ),
+        (
+            'PATH = "f390_i420_deadbeef_z10of20"\n'
+            "evaluator = Evaluator(path_name=PATH)",
+            "f390_i420_deadbeef_z10of20",
+        ),
+        ("evaluator = Evaluator(path_name=choose_path())", None),
+        ('evaluator = Evaluator(path_name="init")', "init"),
+    ],
+)
+def test_literal_evaluator_path_extraction(code: str, expected: str | None) -> None:
+    assert extract_literal_evaluator_path_name(code) == expected
+
+
+def test_literal_evaluator_path_extraction_rejects_distinct_paths() -> None:
+    code = "\n".join(
+        [
+            'first = Evaluator(path_name="first")',
+            'second = Evaluator(path_name="second")',
+        ]
+    )
+
+    with pytest.raises(ValueError, match="multiple distinct"):
+        extract_literal_evaluator_path_name(code)
+
+
+def test_island_call_stage_exposes_selected_route_to_subprocess() -> None:
+    stage = IslandPathAwareCallProgramFunction(
+        function_name="entrypoint",
+        python_path=[],
+        timeout=5.0,
+    )
+    program = _program(390.0, "mid_margin")
+    program.metadata["mutation_regime"] = "mid_margin"
+
+    assert stage._program_env_updates(program) == {
+        "GIGAEVO_MUTATION_REGIME": "mid_margin"
+    }
+
+
+@pytest.mark.asyncio
+async def test_island_call_stage_does_not_enforce_prompt_path_limits(
+    monkeypatch,
+) -> None:
+    stage = IslandPathAwareCallProgramFunction(
+        function_name="entrypoint",
+        python_path=[],
+        timeout=5.0,
+    )
+    program = _program(390.0, "mid_margin")
+    program.code = (
+        'def entrypoint():\n    return Evaluator(path_name="selected-path")'
+    )
+    program.metadata["mutation_regime"] = "mid_margin"
+    parent_compute = AsyncMock(return_value=Box[Any](data="result"))
+    monkeypatch.setattr(CachedCallProgramFunction, "compute", parent_compute)
+
+    result = await stage.compute(program)
+
+    assert result.data == "result"
+    parent_compute.assert_awaited_once_with(program)

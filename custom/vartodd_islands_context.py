@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 from pathlib import Path
 import re
 import sys
+from types import SimpleNamespace
 from typing import Any
 
+from custom.additional_stages import CachedCallProgramFunction
 from gigaevo.evolution.strategies.base import (
     MutationRoute,
     ParentRole,
 )
-from gigaevo.programs.core_types import StageIO
+from gigaevo.programs.core_types import ProgramStageResult, StageError, StageIO
 from gigaevo.programs.program import EXCLUDE_STAGE_RESULTS, Program
 from gigaevo.programs.stages.base import Stage
 from gigaevo.programs.stages.collector import (
@@ -102,6 +105,134 @@ class _PathStoreClient:
         return module.PathStore(root_dir=str(self.root_dir))
 
 
+def extract_literal_evaluator_path_name(code: str) -> str | None:
+    """Return the one static ``Evaluator(path_name=...)`` value in *code*.
+
+    Module-level string constants are accepted. Dynamic expressions are not,
+    because a path must be reserved before the subprocess starts.
+    """
+    tree = ast.parse(code)
+    string_constants: dict[str, str] = {}
+    for statement in tree.body:
+        target: ast.expr | None = None
+        value: ast.expr | None = None
+        if (
+            isinstance(statement, ast.Assign)
+            and len(statement.targets) == 1
+        ):
+            target = statement.targets[0]
+            value = statement.value
+        elif isinstance(statement, ast.AnnAssign):
+            target = statement.target
+            value = statement.value
+        if (
+            isinstance(target, ast.Name)
+            and isinstance(value, ast.Constant)
+            and isinstance(value.value, str)
+        ):
+            string_constants[target.id] = value.value
+
+    paths: set[str] = set()
+    dynamic_path = False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        callable_name = (
+            node.func.id
+            if isinstance(node.func, ast.Name)
+            else node.func.attr
+            if isinstance(node.func, ast.Attribute)
+            else None
+        )
+        if callable_name != "Evaluator":
+            continue
+        keyword = next(
+            (item for item in node.keywords if item.arg == "path_name"),
+            None,
+        )
+        if keyword is None:
+            continue
+        if (
+            isinstance(keyword.value, ast.Constant)
+            and isinstance(keyword.value.value, str)
+        ):
+            paths.add(keyword.value.value)
+        elif (
+            isinstance(keyword.value, ast.Name)
+            and keyword.value.id in string_constants
+        ):
+            paths.add(string_constants[keyword.value.id])
+        else:
+            dynamic_path = True
+
+    if len(paths) > 1:
+        raise ValueError(
+            "program contains multiple distinct Evaluator path_name values"
+        )
+    if dynamic_path:
+        return None
+    return next(iter(paths), None)
+
+
+@StageRegistry.register(
+    description="Validate an island saved path before executing its program"
+)
+class IslandPathAwareCallProgramFunction(
+    CachedCallProgramFunction,
+):
+    """Validate refinement path selection without enforcing prompt limits."""
+
+    @staticmethod
+    def _route_id(program: Program) -> str | None:
+        return next(
+            (
+                value
+                for key in (
+                    "mutation_regime",
+                    "target_island",
+                    "current_island",
+                )
+                if isinstance((value := program.metadata.get(key)), str)
+                and value in _REFINEMENT_ROUTES
+            ),
+            None,
+        )
+
+    def _program_env_updates(self, program: Program) -> dict[str, Any]:
+        route_id = self._route_id(program)
+        if route_id is None:
+            return {}
+        return {"GIGAEVO_MUTATION_REGIME": route_id}
+
+    def _failure(self, error_type: str, message: str) -> ProgramStageResult:
+        return ProgramStageResult.failure(
+            error=StageError(
+                type=error_type,
+                message=message,
+                stage=self.__class__.__name__,
+            )
+        )
+
+    async def compute(self, program: Program) -> ProgramStageResult | Box[Any]:
+        route_id = self._route_id(program)
+        if route_id is None:
+            return await super().compute(program)
+
+        try:
+            path_name = extract_literal_evaluator_path_name(
+                self._code_str(program)
+            )
+        except (SyntaxError, ValueError) as exc:
+            return self._failure("InvalidPathSelection", str(exc))
+        if path_name is None or path_name == "init":
+            return self._failure(
+                "InvalidPathSelection",
+                f"{route_id} programs must use one literal saved path_name",
+            )
+
+        return await super().compute(program)
+
+
 class VartoddIslandsRouteContextProvider(_PathStoreClient):
     """Build route assignments, filtered parent evidence, and shared cards."""
 
@@ -115,6 +246,10 @@ class VartoddIslandsRouteContextProvider(_PathStoreClient):
         selectable_paths_per_rank: int = 2,
         path_cards_max_chars: int = 24_000,
         parent_aux_max_chars: int = 12_000,
+        mid_root_reuse_limit: int = 6,
+        mid_family_reuse_limit: int = 8,
+        near_family_reuse_limit: int = 7,
+        near_path_reuse_limit: int = 2,
     ):
         super().__init__(problem_dir=problem_dir, root_dir=root_dir)
         self.near_end_path_top_k = max(0, int(near_end_path_top_k))
@@ -125,6 +260,18 @@ class VartoddIslandsRouteContextProvider(_PathStoreClient):
         )
         self.path_cards_max_chars = max(0, int(path_cards_max_chars))
         self.parent_aux_max_chars = max(0, int(parent_aux_max_chars))
+        self.mid_root_reuse_limit = max(1, int(mid_root_reuse_limit))
+        self.mid_family_reuse_limit = max(1, int(mid_family_reuse_limit))
+        self.near_family_reuse_limit = max(1, int(near_family_reuse_limit))
+        self.near_path_reuse_limit = max(1, int(near_path_reuse_limit))
+
+    def _selection_limits(self):
+        return SimpleNamespace(
+            mid_root=self.mid_root_reuse_limit,
+            mid_family=self.mid_family_reuse_limit,
+            near_family=self.near_family_reuse_limit,
+            near_path=self.near_path_reuse_limit,
+        )
 
     def route_is_available(self, route: MutationRoute) -> bool:
         if route.context_profile == "ab_initio":
@@ -138,6 +285,7 @@ class VartoddIslandsRouteContextProvider(_PathStoreClient):
             return bool(
                 self._path_store().has_selectable_paths(
                     route_id=route.regime_id,
+                    limits=self._selection_limits(),
                 )
             )
         return True
@@ -255,6 +403,7 @@ class VartoddIslandsRouteContextProvider(_PathStoreClient):
             top_k=self._route_top_k(route),
             max_per_rank=self.selectable_paths_per_rank,
             max_chars=self.path_cards_max_chars,
+            limits=self._selection_limits(),
         )
 
 
@@ -347,6 +496,15 @@ class PathCardEnrichmentStage(_PathStoreClient, Stage):
         if params.runtime is not None:
             runtime = params.runtime.data.get("runtime")
         metrics = params.metrics.data if params.metrics is not None else {}
+        route_id = next(
+            (
+                value
+                for key in ("mutation_regime", "target_island", "current_island")
+                if isinstance((value := program.metadata.get(key)), str)
+                and value in {"ab_initio", *_REFINEMENT_ROUTES}
+            ),
+            "ab_initio" if program.metadata.get("source") == "initial_program" else None,
+        )
         producer = {
             "metrics": dict(metrics),
             "runtime": runtime,
@@ -360,19 +518,28 @@ class PathCardEnrichmentStage(_PathStoreClient, Stage):
             "timeout_salvaged": (
                 timeout_match is not None and timeout_match.group(1) == "1"
             ),
+            "created_by_route": route_id,
         }
         name = name_match.group(1)
         store = self._path_store()
         store.update_evidence_card(name, producer)
 
-        route_id = program.metadata.get("mutation_regime")
-        if route_id not in _REFINEMENT_ROUTES:
-            route_id = program.metadata.get("target_island")
-        if route_id in _REFINEMENT_ROUTES:
-            loaded_name_match = re.search(
-                r"(?m)^loaded_path_name:\s*(\S+)\s*$",
-                aux,
+        loaded_name_match = re.search(
+            r"(?m)^loaded_path_name:\s*(\S+)\s*$",
+            aux,
+        )
+        if route_id is not None:
+            store.register_created_path(
+                name,
+                route_id=str(route_id),
+                parent_name=(
+                    loaded_name_match.group(1)
+                    if loaded_name_match is not None
+                    else None
+                ),
+                program_id=program.id,
             )
+        if route_id in _REFINEMENT_ROUTES:
             loaded_rank = _match_int(
                 aux,
                 r"(?m)^loaded_path_rank:\s*(\d+)",
@@ -517,6 +684,8 @@ def _match_int(text: str, pattern: str) -> int | None:
 
 
 __all__ = [
+    "extract_literal_evaluator_path_name",
+    "IslandPathAwareCallProgramFunction",
     "IslandEvolutionaryStatisticsCollector",
     "PathCardEnrichmentInputs",
     "PathCardEnrichmentStage",

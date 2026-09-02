@@ -1,5 +1,6 @@
 from pathlib import Path
 import re
+from types import SimpleNamespace
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PROBLEM_DIR = REPO_ROOT / "problems" / "vartodd_evo_gf"
@@ -105,6 +106,64 @@ def test_policy_aux_omits_tohpeprefix_and_uses_todd_z_only() -> None:
     assert "tohpeprefix" not in profile_text.lower()
     assert "pool=final:16/tohpe:8/2/todd:6/2" in profile_text
     assert "z_buckets=todd:64..256/1024" in profile_text
+
+
+def test_policy_aux_uses_native_aggregate_z_when_todd_is_the_only_z_source() -> None:
+    import importlib.util
+    import sys
+
+    problem_dir = REPO_ROOT / "problems" / "vartodd_evo_gf"
+    spec = importlib.util.spec_from_file_location(
+        "_test_vartodd_evo_gf_mcts_dao_native_stats",
+        problem_dir / "mcts_dao.py",
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    sys.path.insert(0, str(problem_dir))
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.remove(str(problem_dir))
+
+    root = SimpleNamespace(
+        state=SimpleNamespace(rows=420),
+        parent=None,
+        incoming=None,
+    )
+    child = SimpleNamespace(
+        state=SimpleNamespace(rows=419),
+        parent=root,
+        incoming=SimpleNamespace(
+            # ActionInfo.total is not the z-bucket count.
+            total=10_000,
+            cand=SimpleNamespace(
+                reduction=1,
+                basis_dim=2,
+                bucket_size=1,
+                pool_tohpe_size=0,
+                pool_tohpeprefix_size=0,
+                pool_todd_size=1,
+            ),
+            # This mirrors the native Stats API: only aggregate z_researched
+            # exists, while the default TOHPE-prefix source is disabled.
+            global_info=SimpleNamespace(
+                max_reduction=1,
+                max_basis=2,
+                accepted_tohpe=0,
+                accepted_tohpeprefix=0,
+                accepted_todd=1,
+                z_researched=64,
+            ),
+        ),
+    )
+    path = module.Path(final_node=child, daos=[module.Dao()])
+
+    text = path.format_path_stats()
+
+    assert "src=H:0/T:1" in text
+    assert "z:64" in text
+    assert "z:0" not in text
 
 
 def test_updated_algorithm_separates_light_builders_from_heavy_tail_refiners() -> None:

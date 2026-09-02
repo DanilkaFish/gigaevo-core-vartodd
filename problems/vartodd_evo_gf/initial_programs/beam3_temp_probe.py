@@ -3,14 +3,13 @@ from helper import (
     ActionPool,
     ActionSelection,
     BaseEvaluator,
-    ExplorationScore,
-    FinalizationScore,
     PolicyScores,
     SamplingBudget,
     SourcePool,
     ToddSearch,
     TohpeSearch,
     ZBucketSearch,
+    policy,
 )
 import numpy as np
 from pymoo.algorithms.soo.nonconvex.pso import PSO
@@ -22,6 +21,59 @@ SEEDS = [23, 24, 25]
 SCOUT_EVALS = 144
 MID_REFINE_EVALS = 48
 MID_REOPEN_MARGIN = 96
+
+
+# TOHPE reduction target band.
+#
+# For each sampled y, the cheap TOHPE z search ranks its z candidates by
+#     max(TARGET_MIN_RED - red, red - TARGET_MAX_RED, 0)
+# so candidates whose reduction lands inside [TARGET_MIN_RED, TARGET_MAX_RED]
+# come first, and outside the band the ones nearest to it follow. The chosen z
+# then enter the action pool on the exploration score as usual -- the band only
+# decides which z get that far, it does not replace the scoring.
+#
+# Choosing a *size* of reduction rather than always the largest is the point:
+#   [10, 10] aims at the greatest reductions -- the classic greedy behaviour,
+#            productive in the early bands where large reductions are plentiful;
+#   [3, 4]   aims at medium reductions, which keeps more of the structure intact
+#            for later steps instead of spending it in one move;
+#   [2, 3]   aims at small reductions, matching the terminal band where large
+#            ones have stopped appearing and the search lives on 1-2 per step.
+# TARGET_MIN_RED must be > 0: a zero reduction is not a usable action.
+TARGET_MIN_RED = 10
+TARGET_MAX_RED = 10
+
+
+@policy.exploration
+def explore_score(k, p, fn):
+    """Reduction gated on the basis having room to sample.
+
+    A binary null space of dimension d holds only 2**d - 1 distinct y vectors,
+    so a high-reduction candidate from a dim-1 basis is a dead end: nothing
+    else can be drawn from it. The gate multiplies the reduction reward by a
+    smooth ramp on dim, which a weighted sum cannot do -- it can only add a
+    dim term that a large reduction outweighs.
+    """
+    room = fn.sigmoid((k.ndim - fn.abs(p.w(2))) * 4.0)
+    return k.nred * p.w(0) * room + k.ndim * p.w(1) - k.nzw * fn.abs(p.w(3))
+
+
+@policy.final
+def final_score(k, p, fn):
+    """Rewards being distinct from the rest of the pool, not just being best.
+
+    With beamwidth 3 at temperature 0.35 the selection is stochastic across the
+    top of the pool, so three near-identical actions waste two of the three
+    branches. nrank_score is this candidate's position in the population by
+    pool score; the log term is flat near the top and falls away slowly, which
+    keeps several genuinely different candidates in contention instead of
+    concentrating all the mass on one.
+    """
+    spread = fn.log(k.nrank_score + 0.05) * p.w(1)
+    return (k.nred * p.w(0)
+            + spread
+            + k.ntohpe * p.w(2)
+            + fn.where(k.dim > 3, k.ndim * p.w(3), k.nred * p.w(4)))
 
 
 class Evaluator(BaseEvaluator):
@@ -38,9 +90,11 @@ class Evaluator(BaseEvaluator):
     def policy_mapping(self):
         self.set_scores(
             PolicyScores(
-                ExplorationScore([self.float_range(-4, 4) for _ in range(5)], centers=[0.0, 0.0, 0.0, 0.0, 0.0], pow=1),
-                FinalizationScore(
-                    [self.float_range(-4, 4) for _ in range(6)], centers=[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], pow=1
+                exploration=explore_score.bind(
+                    [self.float_range(-4, 4) for _ in range(explore_score.n_params)]
+                ),
+                final=final_score.bind(
+                    [self.float_range(-4, 4) for _ in range(final_score.n_params)]
                 ),
             )
         )
@@ -53,6 +107,8 @@ class Evaluator(BaseEvaluator):
                 SamplingBudget(one_hot=14, sparse=0, dense=0, sparse_max_weight=2),
                 SourcePool(keep=6, reserve=1),
                 z_choices=3,
+                target_min_red=TARGET_MIN_RED,
+                target_max_red=TARGET_MAX_RED,
             )
         )
         self.set_todd_search(

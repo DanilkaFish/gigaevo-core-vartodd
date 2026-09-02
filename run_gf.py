@@ -24,6 +24,7 @@ SOURCE_ASSETS = (
     "todd.py",
     "full_pso.py",
     "path_store.py",
+    "policy_expr",
     "validate.py",
     "task_description.txt",
     "prompts",
@@ -33,6 +34,7 @@ INITIAL_PROGRAM_POOLS = {
     "default": "initial_programs",
     "best": "initial_programs_best",
     "expensive": "initial_programs_expensive",
+    "ultra_expensive": "initial_programs_ultra_expensive",
 }
 _RESERVED_OVERRIDES = {
     "problem.name",
@@ -41,7 +43,15 @@ _RESERVED_OVERRIDES = {
     "initial_exec_cache_dir",
 }
 DEFAULT_VARTODD_CALL_TIMEOUT = 3800
+ULTRA_EXPENSIVE_CALL_TIMEOUT = 9000
 MATRIX_MANIFEST_NAME = "matrix_manifest.yaml"
+
+
+def default_call_timeout(initial_programs: str) -> int:
+    """Return the default timeout for the selected initial-program pool."""
+    if initial_programs == "ultra_expensive":
+        return ULTRA_EXPENSIVE_CALL_TIMEOUT
+    return DEFAULT_VARTODD_CALL_TIMEOUT
 
 
 def _parse_positive_int(value: str, *, name: str) -> int:
@@ -306,7 +316,7 @@ def build_gf_overrides(
         overlay_key += f"_seeds_{initial_programs}"
     overlay = runtime_root.resolve() / overlay_key / variant_name
     overlay.mkdir(parents=True, exist_ok=True)
-    effective_call_timeout = call_timeout or DEFAULT_VARTODD_CALL_TIMEOUT
+    effective_call_timeout = call_timeout or default_call_timeout(initial_programs)
     _write_metrics(
         source_dir,
         overlay / "metrics.yaml",
@@ -369,13 +379,14 @@ def _usage() -> str:
         "lb=<rank> ub=<rank> "
         "[cache=true|false] [call_timeout=<seconds>] "
         "[soft_timeout_grace=<seconds>] "
-        "[initial_programs=default|best|expensive] "
+        "[initial_programs=default|best|expensive|ultra_expensive] "
         "[ordinary run.py Hydra overrides...]\n\n"
         "Example:\n"
         "  python run_gf.py experiment=vartodd_evo_tohpe_updated_steady "
         "matrix=16 lb=380 ub=420 call_timeout=3800 "
         "soft_timeout_grace=200 cache=false initial_programs=best redis.db=4\n"
         "  # For costly TODD evaluations, use initial_programs=expensive\n"
+        "  # ultra_expensive defaults to call_timeout=9000 when omitted\n"
     )
 
 

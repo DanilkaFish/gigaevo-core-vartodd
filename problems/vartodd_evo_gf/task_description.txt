@@ -34,15 +34,15 @@ use both modes.
 ## 2. Search Mechanics and Policy Knobs
 
 One policy step of FastTODD: the two sources (TOHPE, TODD) generate candidate
-actions; `ExplorationScore` ranks candidates as each source pool is filled and
-merged into one action pool; `FinalizationScore` ranks the merged pool; and
+actions; the exploration score ranks candidates as each source pool is filled
+and merged into one action pool; the finalization score ranks the merged pool; and
 `ActionSelection` expands the chosen action(s). A seed run repeats this step,
 descending in rank, until no positive action remains.
 Each knob below controls one stage of this step.
 
 Actions. An action is a pair `(z, y)`: `z` defines a
 bucket/binary null space, `y` is sampled inside the resulting binary null space, and the pair
-defines a correctness-preserving rewrite. It is hardocoded that only candidates
+defines a correctness-preserving rewrite. It is hardcoded that only candidates
 with positive rank reduction become selectable actions.
 
 y sampling inside a binary null space — `SamplingBudget`:
@@ -68,6 +68,8 @@ TohpeSearch(
     SamplingBudget(...),
     SourcePool(...),
     z_choices=TOHPE_Z_CHOICES,
+    target_min_red=TARGET_MIN_RED,
+    target_max_red=TARGET_MAX_RED,
 )
 
 ToddSearch(
@@ -81,9 +83,16 @@ ToddSearch(
     ),
 )
 ```
+- `target_min_red` / `target_max_red` aim the TOHPE z search at a *size* of
+  reduction instead of always the largest. For each sampled y its z candidates
+  are ranked by
+  `max(target_min_red - red, red - target_max_red, 0)`,
+  so those landing inside `[target_min_red, target_max_red]` come first and,
+  outside it, the nearest to the band follow. This is just filter before explorations scoring 
+  to effectively choose intermediate z_choices actions.
 - TOHPE is the cheap source: a limited TOHPE-specific z/y search with
-  `z_choices` as its z budget. It researches a common part of binary nullspace which is intersection of nullspaces for all z.
-  It firstly sample y then search for `z_choices` z with the largest reduction.
+  `z_choices` as its z budget. It researches a common part of binary null space, which is the intersection of the null spaces for all z.
+  It first samples y, then searches for `z_choices` z with the largest reduction.
   It quickly produces good early and mid-rank
   actions; in some rank bands it stops producing useful binary null spaces or positive
   actions.
@@ -114,7 +123,7 @@ SourcePool(keep=SOURCE_KEEP, reserve=SOURCE_RESERVE)
 - `keep` is the max actions retained per source; `keep=0` disables the source.
 - `reserve <= keep` is the minimum carried into the final merge.
 - Low `reserve` also lets TODD stop researching z near `min_buckets`, so
-  `max_buckets` may never be reached, but low `reserve` leads to search saturation due to lacking of choice
+  `max_buckets` may never be reached, but low `reserve` leads to search saturation for lack of choice.
 
 Merged pool — `ActionPool`:
 ```python
@@ -122,43 +131,132 @@ ActionPool(final_size=FINAL_POOL_SIZE)
 ```
 - `final_size` caps the merged candidate pool after source pools are combined.
 
-Scoring — `PolicyScores`:
+Scoring — `PolicyScores`. A score is an ordinary Python function over named
+knobs, decorated to compile it once. The example below is **not a
+recommendation and not a starting point** -- it exists only to show the kinds of
+term the expression language admits, deliberately mixing them in one place. A
+real score is usually far shorter. Which terms belong in yours is a decision to
+make from the evidence in front of you -- the rendered scores and converged
+weights of the parents, the regime you are in, your own reading of what the
+ranking is failing to separate -- not by copying this shape:
 ```python
-PolicyScores(
-    ExplorationScore(
-        weights=[W_RED, W_DIM, W_BUCKET, W_YW, W_ZW],
-        centers=[C_RED, C_DIM, C_BUCKET, C_YW, C_ZW],
-        pow=POOL_POWER,
-    ),
-    FinalizationScore(
-        weights=[W_RED, W_DIM, W_BUCKET, W_YW, W_ZW, W_TOHPE],
-        centers=[C_RED, C_DIM, C_BUCKET, C_YW, C_ZW, C_TOHPE],
-        pow=FINAL_POWER,
-    ),
+from helper import policy, PolicyScores
+
+C_ZW = 0.35          # a fixed constant: written inline, costs no parameter
+W_TAIL = 1.5
+C_RED = 6            # a reduction center, in exact unnormalized rank-reduction
+                     # counts; normalize it at use with `/ k.bn / 2`
+
+@policy.exploration
+def explore_score(k, p, fn):
+    # ordinary linear weight
+    linear = k.nred * p.w(0) + k.ndim * p.w(1)
+    # nonlinear transform of a knob
+    nonlinear = fn.log(1.0 + k.nbucket) * p.w(2) + fn.exp(-k.nzw) * p.w(3)
+    # product of two features
+    interaction = k.nred * k.ndim * p.w(4)
+    # weight * |feature - center| ** pow, the center itself searched
+    centered = fn.pow(fn.abs(k.nzw - p.w(5)), p.w(6)) * p.w(7)
+    # same shape with the constants fixed instead of searched
+    fixed = fn.pow(fn.abs(k.nyw - C_ZW), 2.0) * W_TAIL
+    # a center given in raw reduction counts, normalized where it is used
+    reduction = fn.abs(k.red - C_RED / k.bn / 2) * p.w(8)
+    return linear + nonlinear + interaction + centered + fn.exp(fixed*reduction)
+
+@policy.final
+def final_score(k, p, fn):
+    return fn.sigmoid(k.nred * p.w(0) + k.ndim * p.w(1) + k.ntohpe * p.w(2)) + ...
+```
+Three arguments are injected; nothing else needs importing:
+- `k` — the knobs (listed below). An unknown or unavailable name raises at
+  import with the valid alternatives.
+- `p` — free scalars. `p.w(0)`, `p.w(1)`, ... must run `0..n-1` with no gaps;
+  `expr.n_params` reports how many the expression declared.
+- `fn` — `exp log sqrt tanh sigmoid abs floor sign min max pow clip where not_`.
+  Builtin `abs()`, `min()`, `max()` also work.
+
+Bind the free scalars in `policy_mapping` from ordinary `map_par` values and
+pass the result to `set_scores`. The uniform `float_range(-4, 4)` sweep below is
+again **only one way to bind**, not the way: a parameter that is a center wants
+the range of the knob it centers, an exponent wants a small positive range, a
+weight that must not change sign wants a one-sided range, and a parameter you
+have already converged can be frozen to a constant so the optimizer stops
+spending dimensions on it. Choose per parameter, from what the expression means
+and what the parent's converged values tell you:
+```python
+explore_w = [
+    self.float_range(-4, 4, group="scores"),      # linear weight, free sign
+    self.float_range(-4, 4, group="scores"),
+    self.float_range(-4, 4, group="scores"),
+    self.float_range(-4, 4, group="scores"),
+    self.float_range(-4, 4, group="scores"),      # interaction weight
+    self.float_range(0.0, 1.0, group="scoresc"),   # a center: the range of k.nzw
+    self.float_range(0.5, 3.0, group="scoresc"),   # an exponent: small, positive
+    0.5,                                          # frozen: converged, not searched
+    self.float_range(-2, 0, group="scoresc"),      # one-sided: must stay a penalty
+]
+
+self.set_scores(
+    PolicyScores(
+        exploration=explore_score.bind(explore_w),
+        # or read the count off the expression, so adding a term widens the
+        # search vector automatically
+        final=final_score.bind(
+            [self.float_range(-4, 4, group="scores") for _ in range(final_score.n_params)]
+        ),
+    )
 )
 ```
-- `ExplorationScore` ranks generated candidates during source pooling and
-  merge: it decides which candidates survive into the intermedieta and final action pool,
-  so if pool are not filled this scores effectively do nothing.
-- `FinalizationScore` ranks the merged pool and beam choices: it decides which
-  action is actually taken.
-- Both scores rank already generated candidates and do not say weither future actions will be good or bad.
+Each score has its own parameter vector, so `p.w(0)` means "this expression's
+first parameter" in both. The list passed to `bind` must have exactly
+`n_params` entries, in `p.w(i)` order.
 
-Features, in constructor order, all normalized to `[0, 1]`:
-- `red`: rank reduction;
-- `dim`: binary null space basis dimension (also the bound on distinct y candidates);
-- `bucket`: z-bucket reduction potential;
-- `yw` / `zw`: y / z Hamming weight;
-- `tohpe` (finalization only): TOHPE lookahead dimension.
+`if`/`else`, `and`, `or` and chained comparisons work and are compiled to
+branchless selects, so **both arms are always evaluated** — a condition does not
+protect a division in the other branch. Loops, comprehensions, lambdas and
+calls to anything but `fn.*` are rejected at import.
 
-Score formula (higher is better):
-```text
-score = sum_i weights[i] * abs(feature[i] - centers[i]) ** pow
-```
-With center `0`, a positive weight rewards larger feature values and a
-negative weight penalizes them. With a nonzero center, a positive weight
-rewards distance from the center and a negative weight rewards closeness to
-it.
+- The exploration score ranks generated candidates during source pooling and
+  merge: it decides which candidates survive into the intermediate and final
+  action pool, so if pools are not filled this score effectively does nothing.
+  It also ranks the inner z choices for a fixed y.
+- The finalization score ranks the merged pool and beam choices: it decides
+  which action is actually taken.
+- Both scores rank already generated candidates and do not say whether future
+  actions will be good or bad.
+
+Knobs. Each quantity is available raw and normalized; prefer the normalized
+form, whose meaning does not change as the rank falls.
+
+Available in **both** exploration and finalization expressions:
+
+| raw | normalized | meaning |
+|---|---|---|
+| `red` | `nred` | rank reduction (`red / bn / 2`) |
+| `dim` | `ndim` | binary null space basis dimension |
+| `bucket` | `nbucket` | z-bucket reduction potential |
+| `yw` / `zw` | `nyw` / `nzw` | y / z Hamming weight; `nzw` is z density |
+| `zsize` | — | length of the z vector |
+| `max_red` | `nmax_red` | bucket's reduction ceiling; `nmax_red` is identical to `nbucket`, prefer `nbucket` |
+| `source` | — | provenance: `1` TOHPE, `2` TOHPE-prefix, `3` TODD |
+| `bucket_id` | — | identifier of the originating bucket |
+| `bn`, `dn`, `wvwn` | — | the normalizers: largest bucket this iteration, TOHPE dimension plus five, parity matrix rows |
+
+Available in **finalization only**, unavailable while source pools are still
+filling:
+
+| raw | normalized | meaning |
+|---|---|---|
+| `tohpe` | `ntohpe` | TOHPE lookahead dimension of the resulting state |
+| `rank_red` | `nrank_red` | how many candidates beat this one on reduction; normalized is a fraction of the pool |
+| `rank_dim` | `nrank_dim` | how many candidates beat this basis dimension |
+| `rank_score` | `nrank_score` | how many candidates beat this pool score |
+| `pool_size` | — | number of candidates in the finalized pool |
+| `pool_tohpe`, `pool_prefix`, `pool_todd` | `f_tohpe`, `f_prefix`, `f_todd` | the merged pool's source mix, as counts and as fractions |
+| `k_idx`, `l_idx` | — | the two indices of the action pair |
+
+The `rank_*` normalized forms are fractions of the pool, so they stay meaningful
+after the raw reduction scale collapses in the terminal band.
 
 Selection — `ActionSelection`:
 ```python
@@ -225,8 +323,6 @@ from helper import (
     INITIAL_RANK,
     TARGET_FINAL_RANK,
     BaseEvaluator,
-    ExplorationScore,
-    FinalizationScore,
     PolicyScores,
     ActionSelection,
     ActionPool,
@@ -235,8 +331,11 @@ from helper import (
     TohpeSearch,
     ToddSearch,
     ZBucketSearch,
+    policy,
 )
 ```
+`describe_knobs()` from `helper` prints the knob list and available math at
+runtime, generated from the implementation.
 The available optimizer library is `pymoo`; standard numeric support such as
 `numpy` may be imported as usual. Evolved programs must not install packages
 at runtime or depend on network access.
@@ -358,17 +457,21 @@ gN <start>-><end> red=<N> <profile> sN
 - `tohpe:A/B` and `todd:C/D`: source keep/reserve;
 - `samples=...`: configured y sampling;
 - `z_buckets=min_buckets/max_buckets/limit_bucket`: configured z research;
-- `scores=pool=w[...];c[...];p=... final=w[...];c[...];p=...`: the policy
-  score rendering.
+- `scores=`: the policy score rendering. Each score prints as the expression
+  it was written as, with its bound parameters substituted, so it can be read
+  back and edited in the same form it was authored:
 ```text
-pool=w[red:W_RED,dim:W_DIM,bucket:W_BUCKET,yw:W_YW,zw:W_ZW];c[red:0,dim:0,bucket:0,yw:0,zw:0];p=POOL_POWER
-final=w[red:W_RED,dim:W_DIM,bucket:W_BUCKET,yw:W_YW,zw:W_ZW,tohpe:W_TOHPE];c[red:0,dim:0,bucket:0,yw:0,zw:0,tohpe:0];p=FINAL_POWER
+pool=((k.nred * +1.83) + (k.ndim * -0.41))
+final=(((k.nred * +2.1) * fn.max((1 - k.nrank_red), 0.05)) + (k.ntohpe * -0.77))
 ```
+Non-linear forms print the same way, so a converged `fn.tanh`, `fn.exp`,
+`fn.where` or ratio is readable and directly editable.
 
-Converged weights and centers are the ranking tendency the run settled on in
-that rank region: a positive weight is a tendency to reward the feature, a
-negative weight a tendency to penalize it, and a center marks the preferred
-feature value.
+Converged coefficients are the ranking tendency the run settled on in that rank
+region: a positive coefficient is a tendency to reward the term, a negative one
+to penalize it. Read a coefficient in the context of the term it multiplies --
+inside `fn.exp(-x * abs(w))` a larger `w` means a sharper decay, not a stronger
+reward.
 
 Always compare configured against actual: `pool=final` vs `pool:<total>`,
 `z_buckets` vs `z:<...>`, keep/reserve vs `src=H/T`.
@@ -590,6 +693,8 @@ Guardrails for vetting Program Insights and mutation context:
   `pool:<total>`.
 - Runtime claims should name the multiplier changed and distinguish ab initio search
   from near-final saved-path tails.
-- Score-center claims should respect normalized `[0, 1]` features and the
-  rendered `w[...]`/`c[...]` split.
+- Score-center claims should treat `C_RED` as an exact, unnormalized
+  rank-reduction count, while all other centers remain normalized to `[0, 1]`.
+  Score weights retain the same scale; also respect the rendered
+  `w[...]`/`c[...]` split.
 - Cheap runtime is strong harmful evidence. The runtime should be above 2000s

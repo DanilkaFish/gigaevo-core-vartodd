@@ -71,3 +71,13 @@ def test_shared_description_defines_z_saturation_as_research_starvation() -> Non
     assert "finding more requires a broader z-bucket research budget" in compact_lower
     assert "increase `max_buckets`" in compact_lower
     assert "increase `limit_bucket`" in compact_lower
+
+
+def test_shared_description_distinguishes_raw_reduction_center() -> None:
+    text = TASK_DESCRIPTION.read_text(encoding="utf-8")
+    compact = " ".join(text.split())
+
+    assert "`C_RED` is not normalized" in compact
+    assert "exact rank-reduction count" in compact
+    assert "All other centers are normalized to `[0, 1]`" in compact
+    assert "Score weights use the same scale" in compact

@@ -3,14 +3,13 @@ from helper import (
     ActionPool,
     ActionSelection,
     BaseEvaluator,
-    ExplorationScore,
-    FinalizationScore,
     PolicyScores,
     SamplingBudget,
     SourcePool,
     ToddSearch,
     TohpeSearch,
     ZBucketSearch,
+    policy,
 )
 import numpy as np
 from pymoo.algorithms.soo.nonconvex.de import DE
@@ -20,6 +19,63 @@ from pymoo.optimize import minimize
 OPTIMIZER_FAMILY = "pymoo_de"
 SEEDS = [17, 18]
 N_EVAL = 288
+
+
+# TOHPE reduction target band.
+#
+# For each sampled y, the cheap TOHPE z search ranks its z candidates by
+#     max(TARGET_MIN_RED - red, red - TARGET_MAX_RED, 0)
+# so candidates whose reduction lands inside [TARGET_MIN_RED, TARGET_MAX_RED]
+# come first, and outside the band the ones nearest to it follow. The chosen z
+# then enter the action pool on the exploration score as usual -- the band only
+# decides which z get that far, it does not replace the scoring.
+#
+# Choosing a *size* of reduction rather than always the largest is the point:
+#   [10, 10] aims at the greatest reductions -- the classic greedy behaviour,
+#            productive in the early bands where large reductions are plentiful;
+#   [3, 4]   aims at medium reductions, which keeps more of the structure intact
+#            for later steps instead of spending it in one move;
+#   [2, 3]   aims at small reductions, matching the terminal band where large
+#            ones have stopped appearing and the search lives on 1-2 per step.
+# TARGET_MIN_RED must be > 0: a zero reduction is not a usable action.
+TARGET_MIN_RED = 3
+TARGET_MAX_RED = 4
+
+
+@policy.exploration
+def explore_score(k, p, fn):
+    """Saturating reduction reward, plus a sparsity preference.
+
+    tanh(nred * gain) flattens once a candidate is clearly good, so the pool
+    stops spending its capacity separating two large reductions and keeps
+    discriminating among the many small ones -- which is where a beam of two
+    actually has a choice to make. p.w(1) is inside the tanh, so the optimizer
+    controls where saturation sets in rather than only how much it is worth.
+
+    Sparse y and z vectors are preferred multiplicatively: a dense candidate is
+    damped rather than merely penalized by an additive term it can outweigh
+    with a large reduction.
+    """
+    saturating = fn.tanh(k.nred * fn.abs(p.w(1)) + 0.01) * p.w(0)
+    sparsity = fn.sigmoid(p.w(2) - (k.nyw + k.nzw) * fn.abs(p.w(3)))
+    return saturating * sparsity + k.ndim * p.w(4)
+
+
+@policy.final
+def final_score(k, p, fn):
+    """Reduction traded against the size of the bucket that produced it.
+
+    Written on the raw knobs: a ratio of two normalized knobs would carry the
+    same 1/bn factor above and below and cancel it, leaving a pointless
+    division. red/bucket is the quantity actually wanted -- reduction per unit
+    of bucket -- and it is a quotient no weighted sum over the two can express.
+    """
+    realized = k.red / fn.max(k.bucket, 1.0)
+    return (k.nred * p.w(0)
+            + realized * p.w(1)
+            + fn.sqrt(fn.max(k.ndim, 0.0)) * p.w(2)
+            + k.ntohpe * p.w(3)
+            - k.nzw * fn.abs(p.w(4)))
 
 
 class Evaluator(BaseEvaluator):
@@ -34,9 +90,11 @@ class Evaluator(BaseEvaluator):
     def policy_mapping(self):
         self.set_scores(
             PolicyScores(
-                ExplorationScore([self.float_range(-4, 4) for _ in range(5)], centers=[0.0, 0.0, 0.0, 0.0, 0.0], pow=1),
-                FinalizationScore(
-                    [self.float_range(-4, 4) for _ in range(6)], centers=[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], pow=1
+                exploration=explore_score.bind(
+                    [self.float_range(-4, 4) for _ in range(explore_score.n_params)]
+                ),
+                final=final_score.bind(
+                    [self.float_range(-4, 4) for _ in range(final_score.n_params)]
                 ),
             )
         )
@@ -44,7 +102,7 @@ class Evaluator(BaseEvaluator):
         todd_cap = self.int_range(512, 6000)
         self.set_action_selection(ActionSelection(beamwidth=2, mode="softmax", temperature=0.16))
         self.set_action_pool(ActionPool(final_size=self.int_range(12, 28)))
-        self.set_tohpe_search(TohpeSearch(samples, SourcePool(keep=6, reserve=1), z_choices=4))
+        self.set_tohpe_search(TohpeSearch(samples, SourcePool(keep=6, reserve=1), z_choices=4, target_min_red=TARGET_MIN_RED, target_max_red=TARGET_MAX_RED))
         self.set_todd_search(
             ToddSearch(
                 SamplingBudget(one_hot=8, sparse=2, dense=0, sparse_max_weight=2),

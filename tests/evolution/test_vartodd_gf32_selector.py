@@ -40,17 +40,17 @@ def test_nonimproving_program_cannot_replace_improving_program() -> None:
     assert selector(new, current) is False
 
 
-def test_higher_loaded_rank_wins_between_equally_improving_programs() -> None:
+def test_better_fitness_wins_before_loaded_rank() -> None:
     selector = _selector()
     new = _program(fitness=1210.0, loaded_rank=1400.0, rank_improved=1.0)
     current = _program(fitness=1200.0, loaded_rank=1240.0, rank_improved=1.0)
 
-    assert selector(new, current) is True
+    assert selector(new, current) is False
 
 
-def test_fitness_breaks_an_exact_rank_tie() -> None:
+def test_higher_loaded_rank_breaks_an_exact_fitness_tie() -> None:
     selector = _selector()
-    new = _program(fitness=1200.0, loaded_rank=1300.0, rank_improved=1.0)
-    current = _program(fitness=1210.0, loaded_rank=1300.0, rank_improved=1.0)
+    new = _program(fitness=1200.0, loaded_rank=1400.0, rank_improved=1.0)
+    current = _program(fitness=1200.0, loaded_rank=1300.0, rank_improved=1.0)
 
     assert selector(new, current) is True

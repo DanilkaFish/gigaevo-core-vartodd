@@ -137,10 +137,60 @@ def test_build_gf_overrides_selects_best_initial_programs(
     assert (overlay / "initial_programs").resolve() == (
         ROOT / "problems" / "vartodd_evo_gf" / "initial_programs_best"
     ).resolve()
-    assert _value(overrides, "initial_exec_cache_dir").endswith(
-        "cache/gf16/best"
-    )
+    assert _value(overrides, "initial_exec_cache_dir").endswith("cache/gf16/best")
     assert "initial_programs=best" not in overrides
+
+
+def test_ultra_expensive_pool_uses_isolated_assets_and_timeout(
+    tmp_path: Path,
+) -> None:
+    launcher = _load_launcher()
+
+    overrides = launcher.build_gf_overrides(
+        [
+            "matrix=16",
+            "lb=380",
+            "ub=420",
+            "initial_programs=ultra_expensive",
+        ],
+        repository_root=ROOT,
+        runtime_root=tmp_path,
+    )
+
+    overlay = Path(_value(overrides, "problem.dir"))
+    metrics = yaml.safe_load((overlay / "metrics.yaml").read_text())
+    assert overlay.parent.name == "gf16_lb380_ub420_seeds_ultra_expensive"
+    assert (overlay / "initial_programs").resolve() == (
+        ROOT / "problems" / "vartodd_evo_gf" / "initial_programs_ultra_expensive"
+    ).resolve()
+    assert metrics["specs"]["runtime"]["upper_bound"] == 9000
+    assert metrics["specs"]["runtime"]["sentinel_value"] == 9000
+    assert _value(overrides, "vartodd_call_timeout") == "9000"
+    assert _value(overrides, "initial_exec_cache_dir").endswith(
+        "cache/gf16/ultra_expensive"
+    )
+
+
+def test_ultra_expensive_pool_respects_explicit_timeout(tmp_path: Path) -> None:
+    launcher = _load_launcher()
+
+    overrides = launcher.build_gf_overrides(
+        [
+            "matrix=16",
+            "lb=380",
+            "ub=420",
+            "initial_programs=ultra_expensive",
+            "call_timeout=7200",
+        ],
+        repository_root=ROOT,
+        runtime_root=tmp_path,
+    )
+
+    overlay = Path(_value(overrides, "problem.dir"))
+    metrics = yaml.safe_load((overlay / "metrics.yaml").read_text())
+    assert _value(overrides, "vartodd_call_timeout") == "7200"
+    assert metrics["specs"]["runtime"]["upper_bound"] == 7200
+    assert metrics["specs"]["runtime"]["sentinel_value"] == 7200
 
 
 def test_build_gf_overrides_rejects_unknown_initial_program_pool(
@@ -259,5 +309,6 @@ def test_redis_storage_uses_configured_prefix() -> None:
 def test_usage_documents_initial_program_selection() -> None:
     usage = _load_launcher()._usage()
 
-    assert "[initial_programs=default|best|expensive]" in usage
+    assert "[initial_programs=default|best|expensive|ultra_expensive]" in usage
     assert "initial_programs=best" in usage
+    assert "9000" in usage

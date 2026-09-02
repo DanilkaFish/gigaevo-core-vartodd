@@ -9,6 +9,7 @@ from loguru import logger
 from omegaconf import DictConfig
 
 from gigaevo.config.resolvers import register_resolvers
+from gigaevo.database.program_storage import ProgramStorage
 from gigaevo.database.redis_program_storage import RedisProgramStorage
 from gigaevo.evolution.engine import EvolutionEngine
 from gigaevo.monitoring.emit import (
@@ -19,11 +20,36 @@ from gigaevo.monitoring.eta_ticker import start_eta_ticker
 from gigaevo.monitoring.live_frontier_compare import start_live_frontier_compare
 from gigaevo.monitoring.live_profiler import start_live_profiler
 from gigaevo.problems.initial_loaders import InitialProgramLoader
+from gigaevo.programs.program_state import ProgramState
 from gigaevo.programs.stages.python_executors.wrapper import default_exec_runner_pool
 from gigaevo.runner.dag_runner import DagRunner
 from gigaevo.utils.logger_setup import setup_logger
 from gigaevo.utils.serve import serve_until_signal
 from gigaevo.utils.trackers.base import LogWriter
+
+
+async def _prepare_incomplete_programs_for_resume(
+    storage: ProgramStorage, policy: str
+) -> tuple[str, int]:
+    """Apply the configured policy to programs interrupted by a prior process."""
+    if policy == "retry":
+        return "recovered", await storage.recover_stranded_programs()
+    if policy != "discard":
+        raise ValueError(
+            "redis.resume_incomplete must be either 'retry' or 'discard', "
+            f"got {policy!r}"
+        )
+
+    discarded = 0
+    for state in (ProgramState.QUEUED, ProgramState.RUNNING):
+        ids = await storage.get_ids_by_status(state.value)
+        discarded += await storage.batch_transition_by_ids(
+            ids, state.value, ProgramState.DISCARDED.value
+        )
+        # batch_transition_by_ids ignores missing blobs. Remove those dangling
+        # IDs as well, otherwise the startup idle barrier would still see them.
+        await storage.remove_ids_from_status_set(state.value, ids)
+    return "discarded", discarded
 
 
 async def run_experiment(cfg: DictConfig) -> None:
@@ -58,9 +84,17 @@ async def run_experiment(cfg: DictConfig) -> None:
             )
 
         if has_data and resume:
-            recovered = await redis_storage.recover_stranded_programs()
-            if recovered:
-                logger.info("Recovered {} stranded RUNNING program(s)", recovered)
+            resume_incomplete = str(cfg.redis.get("resume_incomplete", "retry"))
+            action, affected = await _prepare_incomplete_programs_for_resume(
+                redis_storage, resume_incomplete
+            )
+            if affected:
+                logger.info(
+                    "Resume policy '{}': {} {} incomplete program(s)",
+                    resume_incomplete,
+                    action,
+                    affected,
+                )
             await evolution_engine.restore_state()
             await evolution_engine.strategy.restore_state()
             logger.info(

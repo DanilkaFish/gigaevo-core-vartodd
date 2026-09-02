@@ -204,6 +204,10 @@ experiments/*/paper_data.json
 *results*
 *top_programs
 
+# Keep curated, commit-ready circuit outputs.
+!evolution_results/
+!evolution_results/**
+
 # Keep 05_results.md despite the broad *results* rule above
 !experiments/**/05_results.md
 results_*/

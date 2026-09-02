@@ -4,8 +4,8 @@
 
 Add an eight-program initial pool for matrices where one complete policy
 evaluation can take as long as ten minutes. The intended problem shape is an
-ab-initio descent from roughly rank 5000 to rank 3800 in 100--200 search
-steps.
+ab-initio descent from roughly rank 5000 to rank 3800, with a maximum search
+depth of at least 1000 so depth does not truncate a long successful descent.
 
 Each initial program should normally finish below the 2--3 hour program cap.
 The initial target is approximately 40--100 minutes per program, leaving room
@@ -60,7 +60,9 @@ Every ultra-expensive program:
   descent toward `BaseEvaluator`'s unrelated default final rank;
 - derives rank switches from fractions of
   `INITIAL_RANK - TARGET_FINAL_RANK`, not embedded GF-specific ranks;
-- uses a maximum depth clamped to the inclusive range 100--200;
+- uses `max(1000, round((INITIAL_RANK - TARGET_FINAL_RANK) / 2))` as its
+  maximum depth, so every program allows at least 1000 search steps while
+  remaining matrix-relative for substantially larger rank spans;
 - uses no optimizer library, `ElementwiseProblem`, `minimize`, optimizer
   class, or `optimize*` function;
 - declares no `map_par` parameter slots and calls the evaluator with `[]`;
@@ -78,6 +80,12 @@ specific fixed-strategy label and `TARGET_POLICY_EVALUATIONS` matching the
 maximum planned number of expensive calls. Profile tables, seeds, rank
 fractions, caps, pools, and beams are visible constants or straightforward
 literal data.
+
+Every `TohpeSearch` sampling budget uses numeric `one_hot`, `sparse`, and
+`dense` values no larger than 10. The `one_hot="all"` form is not used in this
+pool. This bound applies only to TOHPE: light or scheduled TODD may retain a
+larger sampling budget when its profile intentionally spends work on
+lower-region action discovery.
 
 ## Profile Execution
 
@@ -183,6 +191,27 @@ consume.
 - Empty seed lists and optimizer fallbacks are not present.
 - Profile selection is deterministic from source constants.
 
+## GF64 Follow-up: Dimension-Preserving Alternatives
+
+The first GF64 execution produced one rank-3847 path from the smallest greedy
+TOHPE profile, while completed larger-pool profiles stopped around rank
+4847--4891. Preserve `tohpe_greedy_profiles.py` exactly as the control.
+
+For the other seven programs:
+
+- reduce TOHPE sampling to roughly 2--6 one-hot, 0--3 sparse, and 0--1 dense
+  candidates;
+- make a light TODD fallback available from the initial rank with
+  `min_buckets=10`, `max_buckets=200`, a finite limit between 200 and 1000,
+  nonzero keep, and reserve 0 or 1;
+- retain wider scheduled terminal TODD where a program already tests it;
+- give four programs an explicitly positive final TOHPE weight;
+- give three programs negative exploration and final reduction weights to
+  test whether avoiding aggressive early reduction preserves dimension.
+
+Only programs still incomplete in the GF64 CSV receive a further call-budget
+reduction: wide beam 2 to 1, late TODD 3 to 2, and seed trajectory 4 to 2.
+
 ## Tests
 
 Add a dedicated structural test module for the new pool. It verifies:
@@ -191,7 +220,9 @@ Add a dedicated structural test module for the new pool. It verifies:
 - all files parse and end with `AUX_DESCRIPTION`;
 - every program starts ab initio and explicitly passes
   `fin_rank=TARGET_FINAL_RANK`;
-- maximum depth is derived and clamped to 100--200;
+- maximum depth is derived from the rank span and is at least 1000;
+- every TOHPE `one_hot`, `sparse`, and `dense` sampling value is numeric and at
+  most 10, without imposing the same cap on TODD sampling;
 - `TARGET_POLICY_EVALUATIONS` matches the approved 6/6/8/6/5/4/6/8 budget;
 - there are no optimizer imports/classes/functions, `ElementwiseProblem`,
   `minimize`, or `map_par` calls;

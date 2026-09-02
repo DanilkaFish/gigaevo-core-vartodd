@@ -3,14 +3,16 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+import math
 import os
 from pathlib import Path
 import sys
+from typing import NamedTuple
 
 import numpy as np
 
 from run_gf import (
-    DEFAULT_VARTODD_CALL_TIMEOUT,
     INITIAL_PROGRAM_POOLS,
     _link_asset,
     _matrix_degree,
@@ -20,6 +22,7 @@ from run_gf import (
     _write_matrix_manifest,
     _write_metrics,
     build_gf_environment,
+    default_call_timeout,
     require_experiment,
 )
 
@@ -29,6 +32,7 @@ LEGACY_SOURCE_ASSETS = (
     "mcts_dao.py",
     "todd.py",
     "full_pso.py",
+    "policy_expr",
     "validate.py",
 )
 ISLAND_SOURCE_ASSETS = (
@@ -38,6 +42,101 @@ ISLAND_SOURCE_ASSETS = (
     "prompts",
 )
 ISLANDS_EXPERIMENT = "vartodd_evo_gf_islands_steady"
+ISLAND_POLICY_ARGUMENTS = frozenset(
+    {
+        "mid_root_reuse_limit",
+        "mid_family_reuse_limit",
+        "near_family_reuse_limit",
+        "near_path_reuse_limit",
+        "mid_no_improvement_penalty",
+        "near_no_improvement_penalty",
+    }
+)
+
+
+class IslandPathPolicyArgs(NamedTuple):
+    mid_root_reuse_limit: int = 6
+    mid_family_reuse_limit: int = 8
+    near_family_reuse_limit: int = 7
+    near_path_reuse_limit: int = 2
+    mid_no_improvement_penalty: float = 12.0
+    near_no_improvement_penalty: float = 16.0
+
+
+def _positive_int(value: str, *, name: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise ValueError(f"{name}=<positive integer> is required") from exc
+    if parsed <= 0:
+        raise ValueError(f"{name}=<positive integer> is required")
+    return parsed
+
+
+def _nonnegative_float(value: str, *, name: str) -> float:
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise ValueError(f"{name}=<finite non-negative number> is required") from exc
+    if not math.isfinite(parsed) or parsed < 0.0:
+        raise ValueError(f"{name}=<finite non-negative number> is required")
+    return parsed
+
+
+def _parse_island_policy_values(values: dict[str, str]) -> IslandPathPolicyArgs:
+    defaults = IslandPathPolicyArgs()
+    return IslandPathPolicyArgs(
+        mid_root_reuse_limit=_positive_int(
+            values.get("mid_root_reuse_limit", str(defaults.mid_root_reuse_limit)),
+            name="mid_root_reuse_limit",
+        ),
+        mid_family_reuse_limit=_positive_int(
+            values.get(
+                "mid_family_reuse_limit", str(defaults.mid_family_reuse_limit)
+            ),
+            name="mid_family_reuse_limit",
+        ),
+        near_family_reuse_limit=_positive_int(
+            values.get(
+                "near_family_reuse_limit", str(defaults.near_family_reuse_limit)
+            ),
+            name="near_family_reuse_limit",
+        ),
+        near_path_reuse_limit=_positive_int(
+            values.get("near_path_reuse_limit", str(defaults.near_path_reuse_limit)),
+            name="near_path_reuse_limit",
+        ),
+        mid_no_improvement_penalty=_nonnegative_float(
+            values.get(
+                "mid_no_improvement_penalty",
+                str(defaults.mid_no_improvement_penalty),
+            ),
+            name="mid_no_improvement_penalty",
+        ),
+        near_no_improvement_penalty=_nonnegative_float(
+            values.get(
+                "near_no_improvement_penalty",
+                str(defaults.near_no_improvement_penalty),
+            ),
+            name="near_no_improvement_penalty",
+        ),
+    )
+
+
+def _split_island_policy_args(
+    argv: Iterable[str],
+) -> tuple[IslandPathPolicyArgs, list[str]]:
+    values: dict[str, str] = {}
+    forwarded: list[str] = []
+    for arg in argv:
+        key, separator, value = arg.partition("=")
+        if separator and key in ISLAND_POLICY_ARGUMENTS:
+            if key in values:
+                raise ValueError(f"{key} was specified more than once")
+            values[key] = value
+        else:
+            forwarded.append(arg)
+    return _parse_island_policy_values(values), forwarded
 
 
 def _link_island_overlay_assets(
@@ -64,6 +163,7 @@ def build_gf_islands_overrides(
     runtime_root: Path,
 ) -> list[str]:
     """Create an isolated matrix overlay and return its Hydra overrides."""
+    path_policy, common_argv = _split_island_policy_args(argv)
     (
         matrix,
         lower_bound,
@@ -73,7 +173,7 @@ def build_gf_islands_overrides(
         soft_timeout_grace,
         initial_programs,
         forwarded,
-    ) = _split_launcher_args(argv)
+    ) = _split_launcher_args(common_argv)
     forwarded = require_experiment(forwarded, ISLANDS_EXPERIMENT)
     repository_root = repository_root.resolve()
     legacy_source = repository_root / "problems" / "vartodd_evo_gf"
@@ -100,7 +200,7 @@ def build_gf_islands_overrides(
     )
     overlay.mkdir(parents=True, exist_ok=True)
 
-    effective_call_timeout = call_timeout or DEFAULT_VARTODD_CALL_TIMEOUT
+    effective_call_timeout = call_timeout or default_call_timeout(initial_programs)
     _write_metrics(
         legacy_source,
         overlay / "metrics.yaml",
@@ -139,6 +239,18 @@ def build_gf_islands_overrides(
     return [
         *forwarded,
         *timeout_overrides,
+        f"mid_root_reuse_limit={path_policy.mid_root_reuse_limit}",
+        f"mid_family_reuse_limit={path_policy.mid_family_reuse_limit}",
+        f"near_family_reuse_limit={path_policy.near_family_reuse_limit}",
+        f"near_path_reuse_limit={path_policy.near_path_reuse_limit}",
+        (
+            "mid_no_improvement_penalty="
+            f"{path_policy.mid_no_improvement_penalty}"
+        ),
+        (
+            "near_no_improvement_penalty="
+            f"{path_policy.near_no_improvement_penalty}"
+        ),
         f"problem.name={variant_name}",
         f"problem.dir={overlay}",
         f"redis.prefix={variant_name}",
@@ -152,8 +264,13 @@ def _usage() -> str:
         "matrix=<GF degree|exact .npy filename> lb=<rank> ub=<rank> "
         "[cache=true|false] [call_timeout=<seconds>] "
         "[soft_timeout_grace=<seconds>] "
-        "[initial_programs=default|best|expensive] "
+        "[initial_programs=default|best|expensive|ultra_expensive] "
+        "[mid_root_reuse_limit=6] [mid_family_reuse_limit=8] "
+        "[near_family_reuse_limit=7] [near_path_reuse_limit=2] "
+        "[mid_no_improvement_penalty=12] "
+        "[near_no_improvement_penalty=16] "
         "[ordinary run.py Hydra overrides...]\n\n"
+        "ultra_expensive defaults to call_timeout=9000 when omitted.\n\n"
         "Defaults to experiment=vartodd_evo_gf_islands_steady.\n\n"
         "Start with a fresh Redis namespace:\n"
         "  python run_gf_islands.py "
@@ -162,7 +279,11 @@ def _usage() -> str:
         "runner_config.prefetch_factor=1\n\n"
         "Resume the same three-island topology and Redis namespace:\n"
         "  python run_gf_islands.py "
-        "matrix=16 lb=380 ub=421 cache=false redis.resume=true\n"
+        "matrix=16 lb=380 ub=421 cache=false redis.resume=true\n\n"
+        "Resume immediately, discarding interrupted evaluations:\n"
+        "  python run_gf_islands.py "
+        "matrix=16 lb=380 ub=421 cache=false redis.resume=true "
+        "redis.resume_incomplete=discard\n"
     )
 
 

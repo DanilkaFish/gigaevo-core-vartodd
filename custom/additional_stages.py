@@ -235,6 +235,11 @@ class CachedCallProgramFunction(CallProgramFunction):
             return None
         return time.time() + max(0.0, float(self.timeout) - self.soft_timeout_grace_s)
 
+    def _program_env_updates(self, program: Program) -> dict[str, Any]:
+        """Extra subprocess environment supplied by specialized call stages."""
+        del program
+        return {}
+
     async def compute(self, program: Program) -> ProgramStageResult | Box[Any]:
         stage_name = self.__class__.__name__
         code_str = self._code_str(program)
@@ -254,6 +259,7 @@ class CachedCallProgramFunction(CallProgramFunction):
             "GIGAEVO_PROGRAM_ID": program.id,
             "GIGAEVO_PROGRAM_ID_SHORT": program.id[:8],
         }
+        env_updates.update(self._program_env_updates(program))
         if soft_deadline_epoch is not None:
             env_updates.update(
                 {
