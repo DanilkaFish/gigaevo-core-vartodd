@@ -248,6 +248,7 @@ class VartoddIslandsRouteContextProvider(_PathStoreClient):
         parent_aux_max_chars: int = 12_000,
         mid_root_reuse_limit: int = 6,
         mid_family_reuse_limit: int = 8,
+        mid_path_reuse_limit: int = 8,
         near_family_reuse_limit: int = 7,
         near_path_reuse_limit: int = 2,
     ):
@@ -262,6 +263,7 @@ class VartoddIslandsRouteContextProvider(_PathStoreClient):
         self.parent_aux_max_chars = max(0, int(parent_aux_max_chars))
         self.mid_root_reuse_limit = max(1, int(mid_root_reuse_limit))
         self.mid_family_reuse_limit = max(1, int(mid_family_reuse_limit))
+        self.mid_path_reuse_limit = max(1, int(mid_path_reuse_limit))
         self.near_family_reuse_limit = max(1, int(near_family_reuse_limit))
         self.near_path_reuse_limit = max(1, int(near_path_reuse_limit))
 
@@ -269,6 +271,7 @@ class VartoddIslandsRouteContextProvider(_PathStoreClient):
         return SimpleNamespace(
             mid_root=self.mid_root_reuse_limit,
             mid_family=self.mid_family_reuse_limit,
+            mid_path=self.mid_path_reuse_limit,
             near_family=self.near_family_reuse_limit,
             near_path=self.near_path_reuse_limit,
         )

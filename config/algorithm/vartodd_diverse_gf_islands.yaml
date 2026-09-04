@@ -7,6 +7,7 @@ defaults:
 
 mid_root_reuse_limit: 6
 mid_family_reuse_limit: 8
+mid_path_reuse_limit: 8
 near_family_reuse_limit: 7
 near_path_reuse_limit: 3
 mid_no_improvement_penalty: 12.0
@@ -26,6 +27,7 @@ vartodd_islands_route_context:
   parent_aux_max_chars: 12000
   mid_root_reuse_limit: ${mid_root_reuse_limit}
   mid_family_reuse_limit: ${mid_family_reuse_limit}
+  mid_path_reuse_limit: ${mid_path_reuse_limit}
   near_family_reuse_limit: ${near_family_reuse_limit}
   near_path_reuse_limit: ${near_path_reuse_limit}
 

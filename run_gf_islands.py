@@ -46,6 +46,7 @@ ISLAND_POLICY_ARGUMENTS = frozenset(
     {
         "mid_root_reuse_limit",
         "mid_family_reuse_limit",
+        "mid_path_reuse_limit",
         "near_family_reuse_limit",
         "near_path_reuse_limit",
         "mid_no_improvement_penalty",
@@ -57,6 +58,7 @@ ISLAND_POLICY_ARGUMENTS = frozenset(
 class IslandPathPolicyArgs(NamedTuple):
     mid_root_reuse_limit: int = 6
     mid_family_reuse_limit: int = 8
+    mid_path_reuse_limit: int = 8
     near_family_reuse_limit: int = 7
     near_path_reuse_limit: int = 2
     mid_no_improvement_penalty: float = 12.0
@@ -95,6 +97,12 @@ def _parse_island_policy_values(values: dict[str, str]) -> IslandPathPolicyArgs:
                 "mid_family_reuse_limit", str(defaults.mid_family_reuse_limit)
             ),
             name="mid_family_reuse_limit",
+        ),
+        mid_path_reuse_limit=_positive_int(
+            values.get(
+                "mid_path_reuse_limit", str(defaults.mid_path_reuse_limit)
+            ),
+            name="mid_path_reuse_limit",
         ),
         near_family_reuse_limit=_positive_int(
             values.get(
@@ -241,6 +249,7 @@ def build_gf_islands_overrides(
         *timeout_overrides,
         f"mid_root_reuse_limit={path_policy.mid_root_reuse_limit}",
         f"mid_family_reuse_limit={path_policy.mid_family_reuse_limit}",
+        f"mid_path_reuse_limit={path_policy.mid_path_reuse_limit}",
         f"near_family_reuse_limit={path_policy.near_family_reuse_limit}",
         f"near_path_reuse_limit={path_policy.near_path_reuse_limit}",
         (
@@ -266,6 +275,7 @@ def _usage() -> str:
         "[soft_timeout_grace=<seconds>] "
         "[initial_programs=default|best|expensive|ultra_expensive] "
         "[mid_root_reuse_limit=6] [mid_family_reuse_limit=8] "
+        "[mid_path_reuse_limit=8] "
         "[near_family_reuse_limit=7] [near_path_reuse_limit=2] "
         "[mid_no_improvement_penalty=12] "
         "[near_no_improvement_penalty=16] "

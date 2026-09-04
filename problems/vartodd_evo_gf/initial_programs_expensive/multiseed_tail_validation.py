@@ -75,7 +75,7 @@ class Evaluator(BaseEvaluator):
         return TOHPE_FILTERS[self.int_range(0, len(TOHPE_FILTERS) - 1, group="tohpe_filter")]
 
     def policy_mapping(self):
-        target_min_red, target_max_red = self.tohpe_filter()
+        self.target_min_red, self.target_max_red = self.tohpe_filter()
         self.set_scores(
             PolicyScores(
                 exploration=explore_score.bind([self.float_range(-4.0, 4.0, group="scores") for _ in range(explore_score.n_params)]),
@@ -101,8 +101,8 @@ class Evaluator(BaseEvaluator):
                     reserve=self.int_range(1, 5, group="scout"),
                 ),
                 z_choices=self.int_range(4, 14, group="scout"),
-                target_min_red=target_min_red,
-                target_max_red=target_max_red,
+                target_min_red=self.target_min_red,
+                target_max_red=self.target_max_red,
             ),
             ToddSearch(
                 SamplingBudget(one_hot=0, sparse=0, dense=0, sparse_max_weight=0),
@@ -121,8 +121,8 @@ class Evaluator(BaseEvaluator):
                 SamplingBudget(one_hot="all", sparse=4, dense=8, sparse_max_weight=2),
                 SourcePool(keep=9, reserve=2),
                 z_choices=5,
-                target_min_red=target_min_red,
-                target_max_red=target_max_red,
+                target_min_red=self.target_min_red,
+                target_max_red=self.target_max_red,
             ),
             ToddSearch(
                 SamplingBudget(one_hot=12, sparse=4, dense=4, sparse_max_weight=2),

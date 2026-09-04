@@ -12,9 +12,9 @@ constant. Success means a final rank strictly below `loaded_path_rank`.
 
 The inventory has two independent sections. `Ab-initio roots` exposes up to
 four strong original paths. Each stays visible after descendants improve it,
-shows `uses=.../6`, and reports `best_descendant_rank` across its whole lineage.
+shows `uses=.../max_uses`, and reports `best_descendant_rank` across its whole lineage.
 `Mid-margin family frontiers` exposes up to four best current descendants from
-distinct mid-margin families. `family_uses=.../8` is shared by every attempted
+distinct mid-margin families. `family_uses=.../max_uses` is shared by every attempted
 child in that family; an improving descendant replaces the representative but
 does not reset the family counter. Choose the section and path that support the
 experiment you intend to run. Use `best_descendant_rank` and `child_yield=i/f`

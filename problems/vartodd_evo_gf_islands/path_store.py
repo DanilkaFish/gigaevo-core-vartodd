@@ -66,10 +66,13 @@ EVIDENCE_CARD_VERSION = 2
 REFINEMENT_ROUTES = frozenset({"mid_margin", "near_end"})
 NEAR_END_RANK_WINDOW = 100
 SELECTION_ORDER_RULE = (
-    "Paths are ordered least-used first, then by best descendant rank, then "
-    "by rank. The FIRST entry in each section is the most promising one to "
-    "test now; pick another only when the evidence on the card gives a "
-    "concrete reason to prefer it."
+    "The FIRST entry is the least-used path (rank breaks usage ties). "
+    "Remaining entries prioritize best descendant rank, then path rank, "
+    "then usage. Start with the first entry for fresh exploration; choose "
+    "another when its rank or card evidence is more useful. In mid-margin "
+    "and near-end, a family frontier remains eligible while its own "
+    "path_uses are below path_limit, even if family_uses has reached "
+    "family_limit."
 )
 
 
@@ -78,6 +81,7 @@ class PathSelectionLimits(NamedTuple):
     mid_family: int = 8
     near_family: int = 7
     near_path: int = 2
+    mid_path: int = 8
 
 
 class PathStore(_legacy.PathStore):
@@ -305,7 +309,17 @@ class PathStore(_legacy.PathStore):
             raise ValueError(f"unsupported refinement route: {route_id!r}")
         # Older saved paths predate explicit route provenance. Rendering and
         # reservation both backfill it from the saved parent/program lineage.
-        self._normalized_lineage_records()
+        lineage_records = self._normalized_lineage_records()
+        mid_frontier_names = (
+            self._mid_margin_frontier_names(lineage_records)
+            if route_id == "mid_margin"
+            else set()
+        )
+        near_frontier_names = (
+            self._near_end_frontier_names(lineage_records)
+            if route_id == "near_end"
+            else set()
+        )
         with self._locked_usage_index() as index:
             reservations = index.setdefault("route_reservations", {})
             existing = reservations.get(program_id)
@@ -342,25 +356,41 @@ class PathStore(_legacy.PathStore):
                 elif created_by_route == "mid_margin":
                     family_root = str(families.get("mid_margin") or name)
                     families["mid_margin"] = family_root
+                    if self._usage_total(stats) >= int(limits.mid_path):
+                        return False
                     if self._family_usage_total(
                         index,
                         route_id=route_id,
                         family_root=family_root,
                     ) >= int(limits.mid_family):
-                        return False
+                        if name not in mid_frontier_names:
+                            return False
                 else:
                     return False
             else:
                 family_root = str(families.get("near_end") or name)
                 families["near_end"] = family_root
-                if self._usage_total(stats) >= int(limits.near_path):
+                outcomes = self._family_route_outcomes(
+                    index,
+                    route_id=route_id,
+                    family_root=family_root,
+                )
+                improved_count = int(outcomes["improved_count"] or 0)
+                effective_family_limit = (
+                    int(limits.near_family) + improved_count
+                )
+                effective_path_limit = int(limits.near_path) + improved_count
+                if self._usage_total(stats) >= effective_path_limit:
                     return False
                 if self._family_usage_total(
                     index,
                     route_id=route_id,
                     family_root=family_root,
-                ) >= int(limits.near_family):
-                    return False
+                ) >= effective_family_limit:
+                    # A family quota must not hide its current frontier path
+                    # while that path still has individual reuse capacity.
+                    if name not in near_frontier_names:
+                        return False
 
             stats["in_flight_count"] = int(stats.get("in_flight_count") or 0) + 1
             reservations[program_id] = {
@@ -973,6 +1003,49 @@ class PathStore(_legacy.PathStore):
         )
 
     @classmethod
+    def _exploration_then_quality(
+        cls,
+        records: Sequence[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Keep one least-used exploration slot, then rank by path quality.
+
+        A pure usage-first ordering can hide the best frontier behind a long
+        queue of untouched but weaker paths.  Reserve the first position for
+        the least-used candidate (breaking that tie by rank), then order every
+        remaining position by best descendant/rank before usage.  This keeps a
+        single source of fresh exploration without sacrificing frontier
+        refinement in the rest of the prompt.
+        """
+        if not records:
+            return []
+
+        first = min(
+            records,
+            key=lambda record: (
+                cls._usage_key(record),
+                int(record["rank"]),
+                int(record.get("best_descendant_rank") or record["rank"]),
+                -cls._smoothed_yield(record),
+                -int(record.get("yield_improved_count") or 0),
+                -int(record.get("init_rank") or -1),
+                str(record["name"]),
+            ),
+        )
+        remaining = [record for record in records if record is not first]
+        remaining.sort(
+            key=lambda record: (
+                int(record.get("best_descendant_rank") or record["rank"]),
+                int(record["rank"]),
+                cls._usage_key(record),
+                -cls._smoothed_yield(record),
+                -int(record.get("yield_improved_count") or 0),
+                -int(record.get("init_rank") or -1),
+                str(record["name"]),
+            )
+        )
+        return [first, *remaining]
+
+    @classmethod
     def _mid_root_order(cls, record: dict[str, Any]) -> tuple[Any, ...]:
         """Least-used first, then best descendant, then rank."""
         return (
@@ -1049,7 +1122,7 @@ class PathStore(_legacy.PathStore):
                 "nonimproved_count"
             ]
             roots.append(record)
-        roots.sort(key=self._mid_root_order)
+        roots = self._exploration_then_quality(roots)
         roots = self._bounded_records(
             roots,
             top_k=root_top_k,
@@ -1074,17 +1147,19 @@ class PathStore(_legacy.PathStore):
                 route_id="mid_margin",
                 family_root=family_root,
             )
-            if family_uses >= int(limits.mid_family):
-                continue
             representative = dict(min(members, key=self._record_order))
-            representative["family_root"] = family_root
-            representative["family_uses"] = family_uses
-            representative["family_limit"] = int(limits.mid_family)
-            representative["path_uses"] = self._indexed_route_total(
+            path_uses = self._indexed_route_total(
                 usage_index,
                 name=str(representative["name"]),
                 route_id="mid_margin",
             )
+            if path_uses >= int(limits.mid_path):
+                continue
+            representative["family_root"] = family_root
+            representative["family_uses"] = family_uses
+            representative["family_limit"] = int(limits.mid_family)
+            representative["path_uses"] = path_uses
+            representative["path_limit"] = int(limits.mid_path)
             outcomes = self._family_route_outcomes(
                 usage_index,
                 route_id="mid_margin",
@@ -1100,13 +1175,35 @@ class PathStore(_legacy.PathStore):
                 str(representative["name"])
             ]
             representatives.append(representative)
-        representatives.sort(key=self._mid_root_order)
+        representatives = self._exploration_then_quality(representatives)
         representatives = self._bounded_records(
             representatives,
             top_k=family_top_k,
             max_per_rank=max_per_rank,
         )
         return frontier_rank, roots, representatives
+
+    def _mid_margin_frontier_names(
+        self,
+        records: Sequence[dict[str, Any]],
+    ) -> set[str]:
+        """Return the selected frontier representative for each mid family."""
+        by_name = {str(record["name"]): record for record in records}
+        grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for record in records:
+            if record.get("created_by_route") != "mid_margin":
+                continue
+            family_root = self._family_root_for(
+                record,
+                route_id="mid_margin",
+                by_name=by_name,
+            )
+            grouped[family_root].append(record)
+        return {
+            str(min(members, key=self._record_order)["name"])
+            for members in grouped.values()
+            if members
+        }
 
     def _near_end_inventory(
         self,
@@ -1149,10 +1246,11 @@ class PathStore(_legacy.PathStore):
             improved_count = int(outcomes["improved_count"] or 0)
             effective_family_limit = int(limits.near_family) + improved_count
             effective_path_limit = int(limits.near_path) + improved_count
-            if family_uses >= effective_family_limit:
-                continue
             if path_uses >= effective_path_limit:
                 continue
+            # ``representative`` is the current frontier for this family.
+            # Keep it visible until its own path limit is reached, even when
+            # descendants have already consumed the shared family allowance.
             selected = dict(representative)
             selected["family_root"] = family_root
             selected["family_uses"] = family_uses
@@ -1171,8 +1269,28 @@ class PathStore(_legacy.PathStore):
             for record in representatives
             if int(record["rank"]) <= max_near_rank
         ]
-        representatives.sort(key=self._yield_order)
+        representatives = self._exploration_then_quality(representatives)
         return frontier_rank, representatives
+
+    def _near_end_frontier_names(
+        self,
+        records: Sequence[dict[str, Any]],
+    ) -> set[str]:
+        """Return the selected frontier representative for each near family."""
+        by_name = {str(record["name"]): record for record in records}
+        grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for record in records:
+            family_root = self._family_root_for(
+                record,
+                route_id="near_end",
+                by_name=by_name,
+            )
+            grouped[family_root].append(record)
+        return {
+            str(min(members, key=self._record_order)["name"])
+            for members in grouped.values()
+            if members
+        }
 
     def _selection_inventory(
         self,
@@ -1294,7 +1412,9 @@ class PathStore(_legacy.PathStore):
             parts.append(
                 f"family={record['family_root']} "
                 f"family_uses={int(record.get('family_uses') or 0)}/"
-                f"{int(record.get('family_limit') or 0)}"
+                f"{int(record.get('family_limit') or 0)} "
+                f"path_uses={int(record.get('path_uses') or 0)}/"
+                f"{int(record.get('path_limit') or 0)}"
             )
         else:
             parts.append(
